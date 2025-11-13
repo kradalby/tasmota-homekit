@@ -97,9 +97,13 @@ Add to your NixOS configuration:
 ## How It Works
 
 1. **Startup**: Server connects to all configured Tasmota plugs and configures them to use the embedded MQTT broker
-2. **Control**: Commands from HomeKit/Web UI are sent directly via HTTP for low latency
-3. **Updates**: Plug state changes (button presses, power events) are published via MQTT
-4. **Sync**: All interfaces stay synchronized through the event bus
+2. **Monitoring**: Background process validates plugs connect to MQTT within 60 seconds
+   - If a plug never connects, attempts automatic reconfiguration
+   - Ongoing monitoring detects plugs that go offline and validates connectivity
+   - Automatically reconfigures MQTT if plug is reachable via HTTP but not MQTT
+3. **Control**: Commands from HomeKit/Web UI are sent directly via HTTP for low latency
+4. **Updates**: Plug state changes (button presses, power events) are published via MQTT
+5. **Sync**: All interfaces stay synchronized through the event bus
 
 ## Using with HomeKit
 

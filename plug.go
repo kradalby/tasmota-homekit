@@ -267,3 +267,100 @@ func (pm *PlugManager) ProcessStateEvents(ctx context.Context) {
 		}
 	}
 }
+
+// MonitorConnections monitors plug connections and reconfigures MQTT if plugs don't come online
+func (pm *PlugManager) MonitorConnections(ctx context.Context, brokerHost string, brokerPort int) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	// Track initial configuration time
+	initialConfigTime := time.Now()
+	initialCheckDone := false
+
+	for {
+		select {
+		case <-ticker.C:
+			// Initial check: After 60 seconds, verify all plugs have connected at least once
+			if !initialCheckDone && time.Since(initialConfigTime) > 60*time.Second {
+				initialCheckDone = true
+				pm.statesMu.RLock()
+				for plugID, state := range pm.states {
+					if state.LastSeen.IsZero() {
+						slog.Warn("Plug has never connected to MQTT, attempting reconfiguration",
+							"plug_id", plugID,
+							"time_since_startup", time.Since(initialConfigTime).Round(time.Second),
+						)
+						pm.statesMu.RUnlock()
+
+						// Try to reconfigure MQTT
+						if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
+							slog.Error("Failed to reconfigure MQTT for offline plug",
+								"plug_id", plugID,
+								"error", err,
+							)
+							pm.errorPublisher.Publish(PlugErrorEvent{
+								PlugID: plugID,
+								Error:  fmt.Errorf("plug never connected, reconfiguration failed: %w", err),
+							})
+						} else {
+							// Also try to fetch status to verify connectivity
+							if _, err := pm.GetStatus(ctx, plugID); err != nil {
+								slog.Error("Plug not reachable via HTTP",
+									"plug_id", plugID,
+									"error", err,
+								)
+							}
+						}
+						pm.statesMu.RLock()
+					}
+				}
+				pm.statesMu.RUnlock()
+			}
+
+			// Ongoing monitoring: Check for plugs that were connected but haven't been seen recently
+			if initialCheckDone {
+				pm.statesMu.RLock()
+				for plugID, state := range pm.states {
+					if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 120*time.Second {
+						timeSince := time.Since(state.LastSeen).Round(time.Second)
+						pm.statesMu.RUnlock()
+
+						slog.Warn("Plug hasn't been seen in a while, checking connectivity",
+							"plug_id", plugID,
+							"time_since_last_seen", timeSince,
+						)
+
+						// Try to fetch status to verify plug is still reachable
+						if _, err := pm.GetStatus(ctx, plugID); err != nil {
+							slog.Error("Plug not reachable via HTTP",
+								"plug_id", plugID,
+								"error", err,
+								"time_since_last_seen", timeSince,
+							)
+							pm.errorPublisher.Publish(PlugErrorEvent{
+								PlugID: plugID,
+								Error:  fmt.Errorf("plug unreachable for %s: %w", timeSince, err),
+							})
+						} else {
+							// Plug is reachable via HTTP, try reconfiguring MQTT
+							slog.Info("Plug reachable via HTTP but not MQTT, reconfiguring",
+								"plug_id", plugID,
+							)
+							if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
+								slog.Error("Failed to reconfigure MQTT",
+									"plug_id", plugID,
+									"error", err,
+								)
+							}
+						}
+						pm.statesMu.RLock()
+					}
+				}
+				pm.statesMu.RUnlock()
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
+}
