@@ -5,14 +5,16 @@ import (
 	"log/slog"
 
 	"github.com/brutella/hap/accessory"
+	"tailscale.com/util/eventbus"
 )
 
 // HAPManager manages HomeKit accessories and their state synchronization
 type HAPManager struct {
-	bridge      *accessory.Bridge
-	outlets     map[string]*accessory.Outlet
-	commands    chan PlugCommandEvent
-	plugManager *PlugManager
+	bridge          *accessory.Bridge
+	outlets         map[string]*accessory.Outlet
+	commands        chan PlugCommandEvent
+	plugManager     *PlugManager
+	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
 }
 
 // NewHAPManager creates a new HAP manager with accessories for all plugs
@@ -20,7 +22,10 @@ func NewHAPManager(
 	plugConfigs []Plug,
 	commands chan PlugCommandEvent,
 	plugManager *PlugManager,
+	bus *eventbus.Bus,
 ) *HAPManager {
+	client := bus.Client("hapmanager")
+
 	// Create bridge accessory
 	bridge := accessory.NewBridge(accessory.Info{
 		Name:         "Tasmota Bridge",
@@ -30,10 +35,11 @@ func NewHAPManager(
 	})
 
 	hm := &HAPManager{
-		bridge:      bridge,
-		outlets:     make(map[string]*accessory.Outlet),
-		commands:    commands,
-		plugManager: plugManager,
+		bridge:          bridge,
+		outlets:         make(map[string]*accessory.Outlet),
+		commands:        commands,
+		plugManager:     plugManager,
+		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
 	}
 
 	// Create outlet accessory for each plug
@@ -93,10 +99,10 @@ func (hm *HAPManager) UpdateState(plugID string, on bool) {
 }
 
 // ProcessStateChanges listens for state changes and updates HomeKit
-func (hm *HAPManager) ProcessStateChanges(ctx context.Context, stateChanges chan PlugStateChangedEvent) {
+func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 	for {
 		select {
-		case event := <-stateChanges:
+		case event := <-hm.stateSubscriber.Events():
 			hm.UpdateState(event.PlugID, event.State.On)
 		case <-ctx.Done():
 			return
