@@ -1,29 +1,39 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chasefleming/elem-go"
 	"github.com/chasefleming/elem-go/attrs"
+	"tailscale.com/util/eventbus"
 )
 
 // WebServer manages the web UI
 type WebServer struct {
-	plugManager *PlugManager
-	commands    chan PlugCommandEvent
-	events      []string // Simple event log for debugging
+	plugManager     *PlugManager
+	commands        chan PlugCommandEvent
+	events          []string // Simple event log for debugging
+	sseClients      map[chan string]struct{}
+	sseClientsMu    sync.RWMutex
+	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent) *WebServer {
+func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent, bus *eventbus.Bus) *WebServer {
+	client := bus.Client("webserver")
+
 	return &WebServer{
-		plugManager: plugManager,
-		commands:    commands,
-		events:      make([]string, 0, 100),
+		plugManager:     plugManager,
+		commands:        commands,
+		events:          make([]string, 0, 100),
+		sseClients:      make(map[chan string]struct{}),
+		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
 	}
 }
 
@@ -35,11 +45,44 @@ func (ws *WebServer) LogEvent(event string) {
 	}
 }
 
+// broadcastSSE sends a message to all connected SSE clients
+func (ws *WebServer) broadcastSSE(message string) {
+	ws.sseClientsMu.RLock()
+	defer ws.sseClientsMu.RUnlock()
+
+	for client := range ws.sseClients {
+		select {
+		case client <- message:
+		default:
+			// Client channel is full, skip
+		}
+	}
+}
+
+// ProcessStateChanges listens for state changes and broadcasts them via SSE
+func (ws *WebServer) ProcessStateChanges(ctx context.Context) {
+	for {
+		select {
+		case event := <-ws.stateSubscriber.Events():
+			slog.Debug("Web UI: State change received", "plug_id", event.PlugID, "on", event.State.On)
+			ws.broadcastSSE(event.PlugID)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // renderPage renders a basic HTML page
 func (ws *WebServer) renderPage(title string, content elem.Node) string {
 	page := elem.Html(nil,
 		elem.Head(nil,
 			elem.Title(nil, elem.Text(title)),
+			elem.Script(attrs.Props{
+				attrs.Src: "https://unpkg.com/htmx.org@2.0.4",
+			}),
+			elem.Script(attrs.Props{
+				attrs.Src: "https://unpkg.com/htmx-ext-sse@2.2.2/sse.js",
+			}),
 			elem.Style(nil, elem.Text(`
 				body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 0 20px; }
 				h1 { color: #333; }
@@ -60,6 +103,53 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 	return page.Render()
 }
 
+// renderPlugCard renders a single plug card element
+func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugState) elem.Node {
+	statusClass := "off"
+	statusText := "OFF"
+	buttonClass := "off"
+	buttonText := "Turn On"
+	buttonAction := "on"
+
+	if state.On {
+		statusClass = "on"
+		statusText = "ON"
+		buttonClass = "on"
+		buttonText = "Turn Off"
+		buttonAction = "off"
+	}
+
+	return elem.Div(
+		attrs.Props{
+			attrs.ID:    "plug-" + plugID,
+			attrs.Class: "plug " + statusClass,
+			"sse-swap":  plugID,
+			"hx-swap":   "outerHTML",
+		},
+		elem.Div(nil,
+			elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Config.Name)),
+			elem.Div(attrs.Props{attrs.Class: "plug-status"},
+				elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
+					statusText,
+					state.LastUpdated.Format("15:04:05"),
+				)),
+			),
+		),
+		elem.Form(
+			attrs.Props{
+				"hx-post":   "/toggle/" + plugID,
+				"hx-target": "#plug-" + plugID,
+				"hx-swap":   "outerHTML",
+			},
+			elem.Input(attrs.Props{attrs.Type: "hidden", attrs.Name: "action", attrs.Value: buttonAction}),
+			elem.Button(
+				attrs.Props{attrs.Type: "submit", attrs.Class: buttonClass},
+				elem.Text(buttonText),
+			),
+		),
+	)
+}
+
 // HandleIndex renders the main dashboard
 func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	var plugElements []elem.Node
@@ -67,42 +157,7 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	ws.plugManager.statesMu.RLock()
 	for id, info := range ws.plugManager.plugs {
 		state := ws.plugManager.states[id]
-
-		statusClass := "off"
-		statusText := "OFF"
-		buttonClass := "off"
-		buttonText := "Turn On"
-		buttonAction := "on"
-
-		if state.On {
-			statusClass = "on"
-			statusText = "ON"
-			buttonClass = "on"
-			buttonText = "Turn Off"
-			buttonAction = "off"
-		}
-
-		plugDiv := elem.Div(
-			attrs.Props{attrs.Class: "plug " + statusClass},
-			elem.Div(nil,
-				elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Config.Name)),
-				elem.Div(attrs.Props{attrs.Class: "plug-status"},
-					elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
-						statusText,
-						state.LastUpdated.Format("15:04:05"),
-					)),
-				),
-			),
-			elem.Form(
-				attrs.Props{attrs.Method: "POST", attrs.Action: "/toggle/" + id},
-				elem.Input(attrs.Props{attrs.Type: "hidden", attrs.Name: "action", attrs.Value: buttonAction}),
-				elem.Button(
-					attrs.Props{attrs.Type: "submit", attrs.Class: buttonClass},
-					elem.Text(buttonText),
-				),
-			),
-		)
-		plugElements = append(plugElements, plugDiv)
+		plugElements = append(plugElements, ws.renderPlugCard(id, info, state))
 	}
 	ws.plugManager.statesMu.RUnlock()
 
@@ -115,7 +170,13 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	content := elem.Div(nil,
 		elem.H1(nil, elem.Text("Tasmota HomeKit Bridge")),
 		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(ws.plugManager.plugs)))),
-		elem.Div(nil, plugElements...),
+		elem.Div(
+			attrs.Props{
+				"hx-ext":      "sse",
+				"sse-connect": "/events",
+			},
+			plugElements...,
+		),
 		elem.Div(attrs.Props{attrs.Class: "events"},
 			elem.H2(nil, elem.Text("Recent Events")),
 			elem.Div(nil, eventElements...),
@@ -139,7 +200,8 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/toggle/")
 	plugID := path
 
-	if _, exists := ws.plugManager.plugs[plugID]; !exists {
+	info, exists := ws.plugManager.plugs[plugID]
+	if !exists {
 		http.Error(w, "Plug not found", http.StatusNotFound)
 		return
 	}
@@ -154,6 +216,87 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 
 	ws.LogEvent(fmt.Sprintf("Web UI: Toggle %s → %v", plugID, on))
 
-	// Redirect back to index
+	// If HTMX request, return partial HTML
+	if r.Header.Get("HX-Request") == "true" {
+		// Wait a moment for the state to update
+		time.Sleep(100 * time.Millisecond)
+
+		ws.plugManager.statesMu.RLock()
+		state := ws.plugManager.states[plugID]
+		ws.plugManager.statesMu.RUnlock()
+
+		w.Header().Set("Content-Type", "text/html")
+		if _, err := fmt.Fprint(w, ws.renderPlugCard(plugID, info, state).Render()); err != nil {
+			slog.Error("Failed to write response", "error", err)
+		}
+		return
+	}
+
+	// Redirect back to index for non-HTMX requests
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// HandleSSE handles Server-Sent Events for real-time updates
+func (ws *WebServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Create a channel for this client
+	clientChan := make(chan string, 10)
+
+	// Register the client
+	ws.sseClientsMu.Lock()
+	ws.sseClients[clientChan] = struct{}{}
+	ws.sseClientsMu.Unlock()
+
+	// Ensure cleanup on disconnect
+	defer func() {
+		ws.sseClientsMu.Lock()
+		delete(ws.sseClients, clientChan)
+		ws.sseClientsMu.Unlock()
+		close(clientChan)
+	}()
+
+	// Get flusher for SSE
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send events to this client
+	for {
+		select {
+		case plugID := <-clientChan:
+			// Get current state
+			ws.plugManager.statesMu.RLock()
+			info, infoExists := ws.plugManager.plugs[plugID]
+			state, stateExists := ws.plugManager.states[plugID]
+			ws.plugManager.statesMu.RUnlock()
+
+			if !infoExists || !stateExists {
+				continue
+			}
+
+			// Render the plug card
+			html := ws.renderPlugCard(plugID, info, state).Render()
+
+			// Send SSE event with the plug ID as the event name
+			if _, err := fmt.Fprintf(w, "event: %s\n", plugID); err != nil {
+				slog.Error("Failed to write SSE event", "error", err)
+				return
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", html); err != nil {
+				slog.Error("Failed to write SSE data", "error", err)
+				return
+			}
+			flusher.Flush()
+
+		case <-r.Context().Done():
+			// Client disconnected
+			return
+		}
+	}
 }

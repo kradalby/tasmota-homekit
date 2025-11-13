@@ -9,16 +9,17 @@ import (
 	"time"
 
 	"github.com/kradalby/tasmota-go"
+	"tailscale.com/util/eventbus"
 )
 
 // PlugManager manages all Tasmota plug clients and their state
 type PlugManager struct {
-	plugs        map[string]*PlugInfo
-	states       map[string]*PlugState
-	statesMu     sync.RWMutex // Protects states map
-	commands     chan PlugCommandEvent
-	stateChanges chan PlugStateChangedEvent
-	errors       chan PlugErrorEvent
+	plugs          map[string]*PlugInfo
+	states         map[string]*PlugState
+	statesMu       sync.RWMutex // Protects states map
+	commands       chan PlugCommandEvent
+	statePublisher *eventbus.Publisher[PlugStateChangedEvent]
+	errorPublisher *eventbus.Publisher[PlugErrorEvent]
 }
 
 // PlugInfo holds the client and configuration for a plug
@@ -31,15 +32,16 @@ type PlugInfo struct {
 func NewPlugManager(
 	plugConfigs []Plug,
 	commands chan PlugCommandEvent,
-	stateChanges chan PlugStateChangedEvent,
-	errors chan PlugErrorEvent,
+	bus *eventbus.Bus,
 ) (*PlugManager, error) {
+	client := bus.Client("plugmanager")
+
 	pm := &PlugManager{
-		plugs:        make(map[string]*PlugInfo),
-		states:       make(map[string]*PlugState),
-		commands:     commands,
-		stateChanges: stateChanges,
-		errors:       errors,
+		plugs:          make(map[string]*PlugInfo),
+		states:         make(map[string]*PlugState),
+		commands:       commands,
+		statePublisher: eventbus.Publish[PlugStateChangedEvent](client),
+		errorPublisher: eventbus.Publish[PlugErrorEvent](client),
 	}
 
 	// Initialize clients for each plug
@@ -118,10 +120,10 @@ func (pm *PlugManager) SetPower(ctx context.Context, plugID string, on bool) err
 
 	_, err := info.Client.ExecuteCommand(ctx, command)
 	if err != nil {
-		pm.errors <- PlugErrorEvent{
+		pm.errorPublisher.Publish(PlugErrorEvent{
 			PlugID: plugID,
 			Error:  fmt.Errorf("failed to set power: %w", err),
-		}
+		})
 		return err
 	}
 
@@ -133,11 +135,11 @@ func (pm *PlugManager) SetPower(ctx context.Context, plugID string, on bool) err
 	stateCopy := *state
 	pm.statesMu.Unlock()
 
-	// Publish state change
-	pm.stateChanges <- PlugStateChangedEvent{
+	// Publish state change to eventbus
+	pm.statePublisher.Publish(PlugStateChangedEvent{
 		PlugID: plugID,
 		State:  stateCopy,
-	}
+	})
 
 	return nil
 }

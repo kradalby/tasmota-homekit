@@ -11,6 +11,7 @@ import (
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
+	"tailscale.com/util/eventbus"
 )
 
 // getLocalIP returns the local IP address to use for MQTT broker configuration
@@ -36,8 +37,8 @@ func getLocalIP() (string, error) {
 // MQTTHook handles MQTT messages from Tasmota devices
 type MQTTHook struct {
 	mqtt.HookBase
-	stateChanges chan PlugStateChangedEvent
-	plugManager  *PlugManager
+	statePublisher *eventbus.Publisher[PlugStateChangedEvent]
+	plugManager    *PlugManager
 }
 
 // ID returns the hook identifier
@@ -110,10 +111,11 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 			stateCopy := *state
 			h.plugManager.statesMu.Unlock()
 
-			h.stateChanges <- PlugStateChangedEvent{
+			// Publish to eventbus
+			h.statePublisher.Publish(PlugStateChangedEvent{
 				PlugID: plugID,
 				State:  stateCopy,
-			}
+			})
 
 			slog.Info("Plug state updated from MQTT",
 				"plug_id", plugID,

@@ -135,9 +135,9 @@ Features:
 - View all configured plugs and their current state
 - Toggle plugs on/off with a single click
 - See recent events and state changes
-- Real-time status updates
-
-The interface uses simple, clean HTML with no JavaScript required.
+- **Real-time automatic updates** via Server-Sent Events (SSE)
+- HTMX-powered interface for smooth, reactive UX
+- Works without JavaScript (graceful degradation)
 
 ## Architecture
 
@@ -162,10 +162,17 @@ The interface uses simple, clean HTML with no JavaScript required.
 │        │    │                        │                             │
 │        ▼    ▼                        ▼                             │
 │  ┌───────────────────────────────────────────┐                     │
-│  │          Event Channels (Go)              │                     │
-│  │  • commands     (PlugCommandEvent)        │                     │
-│  │  • stateChanges (PlugStateChangedEvent)   │                     │
-│  │  • errors       (PlugErrorEvent)          │                     │
+│  │      Tailscale EventBus (Pub/Sub)         │                     │
+│  │                                           │                     │
+│  │  Publishers:                              │                     │
+│  │    • PlugManager  (state, errors)         │                     │
+│  │    • MQTTHook     (state)                 │                     │
+│  │                                           │                     │
+│  │  Subscribers:                             │                     │
+│  │    • HAPManager   (state → HomeKit)       │                     │
+│  │    • WebServer    (state → SSE)           │                     │
+│  │                                           │                     │
+│  │  Commands: Go channel (PlugCommandEvent)  │                     │
 │  └──────────────────┬────────────────────────┘                     │
 │                     │                                              │
 │                     ▼                                              │
@@ -196,9 +203,31 @@ The interface uses simple, clean HTML with no JavaScript required.
 
 Data Flow:
 ──────────
-1. HomeKit/Web → commands → PlugManager → HTTP → Tasmota
-2. Tasmota → MQTT → MQTTHook → stateChanges → HAPManager
-3. Thread-safe state via sync.RWMutex in PlugManager
+Commands (Control) - Fast direct HTTP:
+  1. HomeKit → HAPManager → commands channel → PlugManager → HTTP → Tasmota
+  2. Web UI → WebServer → commands channel → PlugManager → HTTP → Tasmota
+
+State Updates (Reactive) - EventBus pub/sub pattern:
+  3. Tasmota → MQTT → MQTTHook → eventbus.Publish(PlugStateChangedEvent)
+     ├─→ HAPManager subscribes → outlet.SetValue() → HomeKit clients notified
+     └─→ WebServer subscribes → SSE broadcast → Browser auto-updates
+
+  4. PlugManager direct commands → eventbus.Publish(PlugStateChangedEvent)
+     └─→ Same subscribers notified for consistency
+
+Example: Press button on Tasmota plug
+  • Plug publishes to MQTT broker
+  • MQTTHook receives message, updates state
+  • MQTTHook publishes PlugStateChangedEvent to eventbus
+  • EventBus delivers event to all subscribers:
+    - HAPManager updates HomeKit → iOS app reflects change
+    - WebServer broadcasts via SSE → Browser auto-updates
+  • No manual fan-out, no missed updates
+
+Technology:
+  • EventBus: tailscale.com/util/eventbus (typed pub/sub)
+  • Commands: Go channels (point-to-point)
+  • Thread Safety: sync.RWMutex for shared state
 
 Files:
 ──────

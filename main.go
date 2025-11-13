@@ -20,6 +20,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/listeners"
 
 	"github.com/brutella/hap"
+	"tailscale.com/util/eventbus"
 )
 
 var version = "dev"
@@ -70,36 +71,9 @@ func main() {
 	defer cancel()
 
 	// Initialize event bus
-	// Using channels for now, will integrate proper eventbus when wiring components
-	stateChanges := make(chan PlugStateChangedEvent, 10)
+	bus := eventbus.New()
 	commands := make(chan PlugCommandEvent, 10)
-	errors := make(chan PlugErrorEvent, 10)
-
-	// Event processor goroutine
-	go func() {
-		for {
-			select {
-			case event := <-stateChanges:
-				slog.Debug("Plug state changed",
-					"plug_id", event.PlugID,
-					"on", event.State.On,
-					"power", event.State.Power,
-				)
-			case event := <-commands:
-				slog.Debug("Plug command requested",
-					"plug_id", event.PlugID,
-					"on", event.On,
-				)
-			case event := <-errors:
-				slog.Error("Plug error",
-					"plug_id", event.PlugID,
-					"error", event.Error,
-				)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	errorPublisher := eventbus.Publish[PlugErrorEvent](bus.Client("main"))
 
 	slog.Info("Event system initialized")
 
@@ -124,16 +98,17 @@ func main() {
 	}
 
 	// Initialize plug manager first (before MQTT hook needs it)
-	plugManager, err := NewPlugManager(plugs.Plugs, commands, stateChanges, errors)
+	plugManager, err := NewPlugManager(plugs.Plugs, commands, bus)
 	if err != nil {
 		slog.Error("Failed to initialize plug manager", "error", err)
 		os.Exit(1)
 	}
 
 	// Add MQTT message hook to process messages from Tasmota devices
+	mqttClient := bus.Client("mqtthook")
 	mqttHook := &MQTTHook{
-		stateChanges: stateChanges,
-		plugManager:  plugManager,
+		statePublisher: eventbus.Publish[PlugStateChangedEvent](mqttClient),
+		plugManager:    plugManager,
 	}
 	err = mqttServer.AddHook(mqttHook, nil)
 	if err != nil {
@@ -195,10 +170,10 @@ func main() {
 					"plug_id", plugID,
 					"error", err,
 				)
-				errors <- PlugErrorEvent{
+				errorPublisher.Publish(PlugErrorEvent{
 					PlugID: plugID,
 					Error:  fmt.Errorf("MQTT configuration failed: %w", err),
-				}
+				})
 				return
 			}
 
@@ -207,10 +182,10 @@ func main() {
 	}
 
 	// Initialize HAP (HomeKit) manager
-	hapManager := NewHAPManager(plugs.Plugs, commands, plugManager)
+	hapManager := NewHAPManager(plugs.Plugs, commands, plugManager, bus)
 
 	// Start HAP state change processor
-	go hapManager.ProcessStateChanges(ctx, stateChanges)
+	go hapManager.ProcessStateChanges(ctx)
 
 	// Create and start HAP server
 	accessories := hapManager.GetAccessories()
@@ -247,13 +222,17 @@ func main() {
 	slog.Info("HomeKit bridge ready - pair with PIN", "pin", config.HAP.PIN)
 
 	// Initialize web server
-	webServer := NewWebServer(plugManager, commands)
+	webServer := NewWebServer(plugManager, commands, bus)
 	webServer.LogEvent("Server starting...")
+
+	// Start web state change processor for SSE
+	go webServer.ProcessStateChanges(ctx)
 
 	// Create HTTP handlers
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", webServer.HandleIndex)
 	mux.HandleFunc("/toggle/", webServer.HandleToggle)
+	mux.HandleFunc("/events", webServer.HandleSSE)
 
 	// Create HTTP server
 	httpServer := &http.Server{
