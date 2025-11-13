@@ -1,0 +1,47 @@
+// Example plug configuration for Tasmota HomeKit Bridge
+// Rename this file to plugs.hujson and update with your actual plug information
+//
+// HuJSON is a human-friendly JSON format that allows comments and trailing commas
+// See: https://github.com/tailscale/hujson
+
+{
+  "plugs": [
+    {
+      // Unique identifier for this plug (used internally)
+      "id": "living-room-lamp",
+
+      // Display name shown in HomeKit and Web UI
+      "name": "Living Room Lamp",
+
+      // IP address or hostname of the Tasmota device
+      "address": "192.168.1.100",
+
+      // Optional: Device model for reference
+      "model": "Sonoff S31",
+
+      // Optional: Feature flags (if your device supports these features)
+      "features": {
+        "power_monitoring": true,   // Power usage monitoring (watts)
+        "energy_tracking": true      // Energy consumption tracking (kWh)
+      }
+    },
+
+    {
+      "id": "bedroom-fan",
+      "name": "Bedroom Fan",
+      "address": "192.168.1.101"
+      // Features omitted - will use defaults
+    },
+
+    {
+      "id": "office-heater",
+      "name": "Office Space Heater",
+      "address": "tasmota-heater.local",  // mDNS hostname also supported
+      "model": "Sonoff Basic",
+      "features": {
+        "power_monitoring": false,
+        "energy_tracking": false
+      }
+    }
+  ]
+}

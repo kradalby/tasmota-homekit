@@ -1,0 +1,74 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+tasmota-nefit
+tasmota-homekit
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories (vendor is not used with Go modules)
+vendor/
+
+# Go build cache
+.cache/
+
+# Nix
+result
+result-*
+.direnv/
+.envrc
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Application runtime files
+*.log
+*.pid
+
+# HAP storage (contains pairing data and keys)
+hap/
+*.hap/
+data/
+*.db
+
+# Configuration files with potential secrets
+*.env
+.env.local
+*.secret
+secrets/
+
+# Local development config files (example configs should be checked in)
+plugs.hujson
+config.hujson
+local.hujson
+
+# Test cache
+.test/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS-specific
+Thumbs.db
+.Spotlight-V100
+.Trashes
