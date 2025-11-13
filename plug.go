@@ -14,12 +14,13 @@ import (
 
 // PlugManager manages all Tasmota plug clients and their state
 type PlugManager struct {
-	plugs          map[string]*PlugInfo
-	states         map[string]*PlugState
-	statesMu       sync.RWMutex // Protects states map
-	commands       chan PlugCommandEvent
-	statePublisher *eventbus.Publisher[PlugStateChangedEvent]
-	errorPublisher *eventbus.Publisher[PlugErrorEvent]
+	plugs           map[string]*PlugInfo
+	states          map[string]*PlugState
+	statesMu        sync.RWMutex // Protects states map
+	commands        chan PlugCommandEvent
+	statePublisher  *eventbus.Publisher[PlugStateChangedEvent]
+	errorPublisher  *eventbus.Publisher[PlugErrorEvent]
+	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
 }
 
 // PlugInfo holds the client and configuration for a plug
@@ -37,11 +38,12 @@ func NewPlugManager(
 	client := bus.Client("plugmanager")
 
 	pm := &PlugManager{
-		plugs:          make(map[string]*PlugInfo),
-		states:         make(map[string]*PlugState),
-		commands:       commands,
-		statePublisher: eventbus.Publish[PlugStateChangedEvent](client),
-		errorPublisher: eventbus.Publish[PlugErrorEvent](client),
+		plugs:           make(map[string]*PlugInfo),
+		states:          make(map[string]*PlugState),
+		commands:        commands,
+		statePublisher:  eventbus.Publish[PlugStateChangedEvent](client),
+		errorPublisher:  eventbus.Publish[PlugErrorEvent](client),
+		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
 	}
 
 	// Initialize clients for each plug
@@ -58,10 +60,12 @@ func NewPlugManager(
 
 		// Initialize state
 		pm.states[plugConfig.ID] = &PlugState{
-			ID:          plugConfig.ID,
-			Name:        plugConfig.Name,
-			On:          false,
-			LastUpdated: time.Now(),
+			ID:            plugConfig.ID,
+			Name:          plugConfig.Name,
+			On:            false,
+			LastUpdated:   time.Now(),
+			MQTTConnected: false,
+			LastSeen:      time.Time{}, // Zero time until first message
 		}
 
 		slog.Info("Initialized plug client",
@@ -110,6 +114,18 @@ func (pm *PlugManager) SetPower(ctx context.Context, plugID string, on bool) err
 		return fmt.Errorf("plug %s not found", plugID)
 	}
 
+	// Check connection status and warn if stale
+	pm.statesMu.RLock()
+	state := pm.states[plugID]
+	if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 60*time.Second {
+		slog.Warn("Attempting to control plug that hasn't been seen recently",
+			"id", plugID,
+			"last_seen", state.LastSeen,
+			"time_since", time.Since(state.LastSeen).Round(time.Second),
+		)
+	}
+	pm.statesMu.RUnlock()
+
 	slog.Info("Setting plug power", "id", plugID, "on", on)
 
 	// Send direct command to plug using Tasmota Power command
@@ -129,7 +145,7 @@ func (pm *PlugManager) SetPower(ctx context.Context, plugID string, on bool) err
 
 	// Update state with mutex protection
 	pm.statesMu.Lock()
-	state := pm.states[plugID]
+	state = pm.states[plugID]
 	state.On = on
 	state.LastUpdated = time.Now()
 	stateCopy := *state
@@ -203,6 +219,49 @@ func (pm *PlugManager) ProcessCommands(ctx context.Context) {
 					"error", err,
 				)
 			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// ProcessStateEvents processes state change events from the eventbus (e.g., from MQTT)
+func (pm *PlugManager) ProcessStateEvents(ctx context.Context) {
+	for {
+		select {
+		case event := <-pm.stateSubscriber.Events():
+			// Merge the incoming state with our existing state
+			pm.statesMu.Lock()
+			state, exists := pm.states[event.PlugID]
+			if !exists {
+				pm.statesMu.Unlock()
+				slog.Warn("Received state event for unknown plug", "plug_id", event.PlugID)
+				continue
+			}
+
+			// Merge fields from the event
+			// Only update fields that are meaningful in the event
+			if !event.State.LastSeen.IsZero() {
+				state.LastSeen = event.State.LastSeen
+				state.MQTTConnected = event.State.MQTTConnected
+			}
+
+			if !event.State.LastUpdated.IsZero() {
+				state.LastUpdated = event.State.LastUpdated
+				// Only update On state if LastUpdated was set (indicating power state was in message)
+				state.On = event.State.On
+			}
+
+			stateCopy := *state
+			pm.statesMu.Unlock()
+
+			slog.Debug("Merged state from eventbus",
+				"plug_id", event.PlugID,
+				"on", stateCopy.On,
+				"mqtt_connected", stateCopy.MQTTConnected,
+				"last_seen", stateCopy.LastSeen,
+			)
+
 		case <-ctx.Done():
 			return
 		}

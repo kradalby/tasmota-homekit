@@ -108,7 +108,6 @@ func main() {
 	mqttClient := bus.Client("mqtthook")
 	mqttHook := &MQTTHook{
 		statePublisher: eventbus.Publish[PlugStateChangedEvent](mqttClient),
-		plugManager:    plugManager,
 	}
 	err = mqttServer.AddHook(mqttHook, nil)
 	if err != nil {
@@ -139,6 +138,9 @@ func main() {
 
 	// Start command processor
 	go plugManager.ProcessCommands(ctx)
+
+	// Start state event processor (processes events from MQTT and other sources)
+	go plugManager.ProcessStateEvents(ctx)
 
 	// Fetch initial state for all plugs
 	for _, plug := range plugs.Plugs {
