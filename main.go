@@ -183,6 +183,10 @@ func main() {
 		}(plug.ID)
 	}
 
+	// Start connection monitoring to detect and reconfigure offline plugs
+	go plugManager.MonitorConnections(ctx, localIP, config.MQTT.Port)
+	slog.Info("Connection monitoring started")
+
 	// Initialize HAP (HomeKit) manager
 	hapManager := NewHAPManager(plugs.Plugs, commands, plugManager, bus)
 
