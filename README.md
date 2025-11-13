@@ -134,6 +134,10 @@ Features:
 
 - View all configured plugs and their current state
 - Toggle plugs on/off with a single click
+- **Connection monitoring**: Visual indicators show plug connectivity status
+  - Green: Connected (seen in last 30s)
+  - Orange: Stale (seen 30-60s ago)
+  - Red: Disconnected (not seen in 60+ seconds)
 - See recent events and state changes
 - **Real-time automatic updates** via Server-Sent Events (SSE)
 - HTMX-powered interface for smooth, reactive UX

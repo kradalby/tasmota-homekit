@@ -38,7 +38,6 @@ func getLocalIP() (string, error) {
 type MQTTHook struct {
 	mqtt.HookBase
 	statePublisher *eventbus.Publisher[PlugStateChangedEvent]
-	plugManager    *PlugManager
 }
 
 // ID returns the hook identifier
@@ -49,9 +48,29 @@ func (h *MQTTHook) ID() string {
 // Provides returns the hook methods this hook provides
 func (h *MQTTHook) Provides(b byte) bool {
 	return bytes.Contains([]byte{
+		mqtt.OnConnect,
+		mqtt.OnDisconnect,
 		mqtt.OnPublish,
 		mqtt.OnPublished,
 	}, []byte{b})
+}
+
+// OnConnect is called when a client connects
+func (h *MQTTHook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
+	clientID := cl.ID
+	slog.Info("MQTT client connected", "client_id", clientID)
+	return nil
+}
+
+// OnDisconnect is called when a client disconnects
+func (h *MQTTHook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
+	clientID := cl.ID
+
+	slog.Info("MQTT client disconnected", "client_id", clientID, "error", err, "expire", expire)
+
+	// Try to find which plug this was and mark as disconnected
+	// Since we can't easily map client ID to plug ID, we'll rely on LastSeen timeouts
+	// to determine connection status
 }
 
 // OnPublish is called when a message is received from a client
@@ -101,30 +120,34 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 		}
 	}
 
-	if powerState != "" {
-		// Get current state from plug manager
-		h.plugManager.statesMu.Lock()
-		state, exists := h.plugManager.states[plugID]
-		if exists {
-			state.On = powerState == "ON"
-			state.LastUpdated = time.Now()
-			stateCopy := *state
-			h.plugManager.statesMu.Unlock()
-
-			// Publish to eventbus
-			h.statePublisher.Publish(PlugStateChangedEvent{
-				PlugID: plugID,
-				State:  stateCopy,
-			})
-
-			slog.Info("Plug state updated from MQTT",
-				"plug_id", plugID,
-				"on", stateCopy.On,
-			)
-		} else {
-			h.plugManager.statesMu.Unlock()
-		}
+	// Create partial state update with the information we have from MQTT
+	now := time.Now()
+	partialState := PlugState{
+		ID:            plugID,
+		MQTTConnected: true,
+		LastSeen:      now,
+		LastUpdated:   now,
 	}
+
+	// Update power state if present
+	if powerState != "" {
+		partialState.On = powerState == "ON"
+		slog.Info("Plug state updated from MQTT",
+			"plug_id", plugID,
+			"on", partialState.On,
+		)
+	} else {
+		slog.Debug("Plug connection tracked via MQTT",
+			"plug_id", plugID,
+			"last_seen", partialState.LastSeen,
+		)
+	}
+
+	// Publish to eventbus - PlugManager will merge with its state
+	h.statePublisher.Publish(PlugStateChangedEvent{
+		PlugID: plugID,
+		State:  partialState,
+	})
 
 	return pk, nil
 }

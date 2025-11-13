@@ -89,8 +89,14 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 				.plug { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
 				.plug.on { background: #e8f5e9; }
 				.plug.off { background: #ffebee; }
+				.plug-info { flex: 1; }
 				.plug-name { font-size: 1.2em; font-weight: 500; }
-				.plug-status { font-size: 0.9em; color: #666; }
+				.plug-status { font-size: 0.9em; color: #666; margin-top: 4px; }
+				.connection-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 0.85em; }
+				.connection-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+				.connection-indicator.connected { background: #4caf50; }
+				.connection-indicator.stale { background: #ff9800; }
+				.connection-indicator.disconnected { background: #f44336; }
 				button { padding: 10px 20px; font-size: 1em; cursor: pointer; border: none; border-radius: 4px; }
 				button.on { background: #4caf50; color: white; }
 				button.off { background: #f44336; color: white; }
@@ -119,6 +125,25 @@ func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugSt
 		buttonAction = "off"
 	}
 
+	// Determine connection status
+	var connectionIndicator, connectionText string
+	if state.LastSeen.IsZero() {
+		connectionIndicator = "disconnected"
+		connectionText = "Never seen"
+	} else {
+		timeSinceSeen := time.Since(state.LastSeen)
+		if timeSinceSeen < 30*time.Second {
+			connectionIndicator = "connected"
+			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
+		} else if timeSinceSeen < 60*time.Second {
+			connectionIndicator = "stale"
+			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
+		} else {
+			connectionIndicator = "disconnected"
+			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
+		}
+	}
+
 	return elem.Div(
 		attrs.Props{
 			attrs.ID:    "plug-" + plugID,
@@ -126,13 +151,17 @@ func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugSt
 			"sse-swap":  plugID,
 			"hx-swap":   "outerHTML",
 		},
-		elem.Div(nil,
+		elem.Div(attrs.Props{attrs.Class: "plug-info"},
 			elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Config.Name)),
 			elem.Div(attrs.Props{attrs.Class: "plug-status"},
 				elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
 					statusText,
 					state.LastUpdated.Format("15:04:05"),
 				)),
+			),
+			elem.Div(attrs.Props{attrs.Class: "connection-status"},
+				elem.Span(attrs.Props{attrs.Class: "connection-indicator " + connectionIndicator}),
+				elem.Text(connectionText),
 			),
 		),
 		elem.Form(

@@ -48,12 +48,14 @@ type PlugFeatures struct {
 
 // PlugState represents the runtime state of a plug
 type PlugState struct {
-	ID          string
-	Name        string
-	On          bool
-	Power       float64 // Watts
-	Energy      float64 // kWh
-	LastUpdated time.Time
+	ID            string
+	Name          string
+	On            bool
+	Power         float64 // Watts
+	Energy        float64 // kWh
+	LastUpdated   time.Time
+	MQTTConnected bool      // Is the plug currently connected to MQTT
+	LastSeen      time.Time // Last time we received an MQTT message from this plug
 }
 
 // Event types for the event bus
