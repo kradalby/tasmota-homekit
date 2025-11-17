@@ -90,6 +90,10 @@ Add to your NixOS configuration:
 
     # Optional: Load secrets from file
     # environmentFile = "/run/secrets/tasmota-homekit.env";
+
+    # Optional: Tailscale auth key from file (recommended for secrets)
+    # The file content will be passed as TASMOTA_HOMEKIT_TS_AUTHKEY
+    # tailscaleAuthKeyFile = "/run/secrets/tailscale-authkey";
   };
 }
 ```
