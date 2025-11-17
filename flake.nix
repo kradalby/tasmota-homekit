@@ -59,7 +59,7 @@
           };
 
           # Package definition
-          packages.default = buildGoModule rec {
+          packages.default = buildGoModule {
             pname = "tasmota-homekit";
             version = self.rev or "dev";
 
@@ -118,6 +118,16 @@
               description = "Environment file for additional configuration (e.g., secrets)";
               example = "/run/secrets/tasmota-homekit.env";
             };
+
+            tailscaleAuthKeyFile = mkOption {
+              type = types.nullOr types.path;
+              default = null;
+              description = ''
+                Path to a file containing the Tailscale auth key.
+                The content will be passed to the service via the TASMOTA_HOMEKIT_TS_AUTHKEY environment variable.
+              '';
+              example = "/run/secrets/tailscale-authkey";
+            };
           };
 
           config = mkIf cfg.enable {
@@ -128,7 +138,6 @@
 
               serviceConfig = {
                 Type = "simple";
-                ExecStart = "${cfg.package}/bin/tasmota-homekit";
                 Restart = "always";
                 RestartSec = "10s";
 
@@ -149,11 +158,20 @@
                 ProtectKernelTunables = true;
                 ProtectKernelModules = true;
                 ProtectControlGroups = true;
-              } // (optionalAttrs (cfg.environmentFile != null) {
+              } // (optionalAttrs (cfg.tailscaleAuthKeyFile != null) {
+                LoadCredential = "tailscale-authkey:${cfg.tailscaleAuthKeyFile}";
+              }) // (optionalAttrs (cfg.environmentFile != null) {
                 EnvironmentFile = cfg.environmentFile;
               });
 
               environment = cfg.environment;
+
+              script = if cfg.tailscaleAuthKeyFile != null then ''
+                export TASMOTA_HOMEKIT_TS_AUTHKEY=$(cat $CREDENTIALS_DIRECTORY/tailscale-authkey)
+                exec ${cfg.package}/bin/tasmota-homekit
+              '' else ''
+                exec ${cfg.package}/bin/tasmota-homekit
+              '';
             };
           };
         };
