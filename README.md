@@ -93,10 +93,20 @@ Add to your NixOS configuration:
   services.tasmota-homekit = {
     enable = true;
 
+    # Automatically open firewall ports (default: false)
+    openFirewall = true;
+
+    # Optional: Customize ports (defaults shown)
+    ports = {
+      hap = 8080;   # HomeKit Accessory Protocol
+      web = 8081;   # Web interface
+      mqtt = 1883;  # MQTT broker
+    };
+
     environment = {
       TASMOTA_HOMEKIT_HAP_PIN = "12345678";
-      TASMOTA_HOMEKIT_HAP_PORT = "8080";
       TASMOTA_HOMEKIT_PLUGS_CONFIG = "/etc/tasmota-homekit/plugs.hujson";
+      # Port configuration is handled automatically via ports option
     };
 
     # Optional: Load secrets from file
@@ -126,6 +136,15 @@ systemctl restart tasmota-homekit
 - State: `/var/lib/tasmota-homekit/`
 - Cache: `/var/cache/tasmota-homekit/`
 - Runtime: `/run/tasmota-homekit/`
+
+**Firewall Configuration:**
+
+The module can automatically open the required firewall ports when `openFirewall = true`:
+- HAP port (default: 8080) - HomeKit Accessory Protocol
+- Web port (default: 8081) - Web interface
+- MQTT port (default: 1883) - Embedded MQTT broker
+
+You can customize the ports using the `ports` option. Port values are automatically passed to the service via environment variables.
 
 ## How It Works
 

@@ -102,6 +102,35 @@
               description = "The tasmota-homekit package to use";
             };
 
+            openFirewall = mkOption {
+              type = types.bool;
+              default = false;
+              description = ''
+                Whether to automatically open the necessary ports in the firewall.
+                Opens ports for HAP (HomeKit), Web interface, and MQTT broker.
+              '';
+            };
+
+            ports = {
+              hap = mkOption {
+                type = types.port;
+                default = 8080;
+                description = "Port for the HomeKit Accessory Protocol (HAP) server";
+              };
+
+              web = mkOption {
+                type = types.port;
+                default = 8081;
+                description = "Port for the web interface";
+              };
+
+              mqtt = mkOption {
+                type = types.port;
+                default = 1883;
+                description = "Port for the embedded MQTT broker";
+              };
+            };
+
             environment = mkOption {
               type = types.attrsOf types.str;
               default = { };
@@ -131,6 +160,22 @@
           };
 
           config = mkIf cfg.enable {
+            # Set default port environment variables if not explicitly set
+            services.tasmota-homekit.environment = {
+              TASMOTA_HOMEKIT_HAP_PORT = mkDefault (toString cfg.ports.hap);
+              TASMOTA_HOMEKIT_WEB_PORT = mkDefault (toString cfg.ports.web);
+              TASMOTA_HOMEKIT_MQTT_PORT = mkDefault (toString cfg.ports.mqtt);
+            };
+
+            # Open firewall ports if requested
+            networking.firewall = mkIf cfg.openFirewall {
+              allowedTCPPorts = [
+                cfg.ports.hap   # HomeKit Accessory Protocol
+                cfg.ports.web   # Web interface
+                cfg.ports.mqtt  # MQTT broker
+              ];
+            };
+
             systemd.services.tasmota-homekit = {
               description = "Tasmota HomeKit Bridge";
               documentation = [ "https://github.com/kradalby/tasmota-homekit" ];
