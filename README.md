@@ -4,9 +4,10 @@ Control your Tasmota smart plugs through Apple HomeKit and a simple web interfac
 
 ## Features
 
-- **HomeKit Integration**: Full HomeKit support for Tasmota plugs
+- **HomeKit Integration**: Full HomeKit support for Tasmota plugs with QR code pairing
 - **Hybrid Control**: Fast direct HTTP commands + reactive MQTT updates
-- **Web Interface**: Simple control panel accessible over Tailscale or local network
+- **Web Interface**: Simple control panel with HomeKit QR code, accessible over Tailscale or local network
+- **Tailscale Integration**: Built-in Tailscale support via kra/web for secure remote access
 - **Event-Driven**: Real-time state synchronization across all interfaces
 - **Embedded MQTT**: No external broker needed
 - **Single Binary**: Easy deployment with NixOS module included
@@ -73,6 +74,7 @@ See `.env.example` for all available options.
 The NixOS module includes comprehensive security hardening and follows systemd best practices:
 
 **Features:**
+
 - ✅ Automatic startup with `multi-user.target`
 - ✅ Waits for network to be online before starting
 - ✅ Automatic restart on failure (max 5 attempts per minute)
@@ -80,6 +82,8 @@ The NixOS module includes comprehensive security hardening and follows systemd b
 - ✅ Dedicated dynamic user with minimal privileges
 - ✅ Persistent state and cache directories
 - ✅ Secure credential loading for secrets
+- ✅ Built-in Tailscale integration for secure remote access
+- ✅ HomeKit QR code displayed in terminal and web interface
 
 Add to your NixOS configuration:
 
@@ -96,25 +100,36 @@ Add to your NixOS configuration:
     # Automatically open firewall ports (default: false)
     openFirewall = true;
 
-    # Optional: Customize ports (defaults shown)
+    # Port configuration (defaults shown)
     ports = {
       hap = 8080;   # HomeKit Accessory Protocol
       web = 8081;   # Web interface
       mqtt = 1883;  # MQTT broker
     };
 
-    environment = {
-      TASMOTA_HOMEKIT_HAP_PIN = "12345678";
-      TASMOTA_HOMEKIT_PLUGS_CONFIG = "/etc/tasmota-homekit/plugs.hujson";
-      # Port configuration is handled automatically via ports option
+    # HomeKit configuration
+    hap = {
+      pin = "12345678";  # Default: "00102003"
+      storagePath = "/var/lib/tasmota-homekit/hap";  # Default path
     };
+
+    # Path to plugs configuration file (required)
+    plugsConfig = /etc/tasmota-homekit/plugs.hujson;
+
+    # Optional: Tailscale configuration for remote access
+    tailscale = {
+      enable = true;  # Enable Tailscale integration
+      hostname = "tasmota-homekit";  # Tailscale hostname
+      authKeyFile = "/run/secrets/tailscale-authkey";  # Path to auth key file
+    };
+
+    # Optional: Additional environment variables
+    # environment = {
+    #   CUSTOM_VAR = "value";
+    # };
 
     # Optional: Load secrets from file
     # environmentFile = "/run/secrets/tasmota-homekit.env";
-
-    # Optional: Tailscale auth key from file (recommended for secrets)
-    # The file content will be passed as TASMOTA_HOMEKIT_TS_AUTHKEY
-    # tailscaleAuthKeyFile = "/run/secrets/tailscale-authkey";
   };
 }
 ```
@@ -133,6 +148,7 @@ systemctl restart tasmota-homekit
 ```
 
 **Storage Locations:**
+
 - State: `/var/lib/tasmota-homekit/`
 - Cache: `/var/cache/tasmota-homekit/`
 - Runtime: `/run/tasmota-homekit/`
@@ -140,11 +156,21 @@ systemctl restart tasmota-homekit
 **Firewall Configuration:**
 
 The module can automatically open the required firewall ports when `openFirewall = true`:
+
 - HAP port (default: 8080) - HomeKit Accessory Protocol
 - Web port (default: 8081) - Web interface
 - MQTT port (default: 1883) - Embedded MQTT broker
 
 You can customize the ports using the `ports` option. Port values are automatically passed to the service via environment variables.
+
+**Tailscale Integration:**
+
+When `tailscale.enable = true`, the web interface is accessible via:
+
+- **HTTPS**: `https://<hostname>` (Tailscale with automatic TLS certificates)
+- **HTTP**: `http://localhost:<port>` (local access)
+
+The service uses [kra/web](https://github.com/kradalby/kra) to provide seamless Tailscale integration. The auth key is securely loaded from the file specified in `tailscale.authKeyFile`.
 
 ## How It Works
 
@@ -159,13 +185,29 @@ You can customize the ports using the `ports` option. Port values are automatica
 
 ## Using with HomeKit
 
-After starting the server, you'll see a message like:
+After starting the server, you'll see a QR code in the terminal output:
 
 ```
+========================================
 HomeKit bridge ready - pair with PIN: 00102003
+
+[QR CODE DISPLAYED HERE]
+
+========================================
 ```
+
+The QR code is also available on the web interface for easy pairing.
 
 **To add to HomeKit:**
+
+**Option 1: Scan QR Code (Easiest)**
+
+1. Open the Home app on your iPhone/iPad
+2. Tap the "+" button → "Add Accessory"
+3. Point your camera at the QR code (shown in terminal or web interface)
+4. Follow the on-screen instructions
+
+**Option 2: Manual PIN Entry**
 
 1. Open the Home app on your iPhone/iPad
 2. Tap the "+" button → "Add Accessory"
@@ -184,10 +226,12 @@ Your Tasmota plugs will appear as individual outlets in HomeKit. You can:
 
 ## Web Interface
 
-A simple web dashboard is available at `http://localhost:8081` (configurable via `TASMOTA_HOMEKIT_WEB_PORT`).
+A simple web dashboard is available at `http://localhost:8081` (configurable via ports) or via Tailscale when enabled.
 
 Features:
 
+- **HomeKit QR Code**: Scan directly from the web interface to pair with HomeKit
+- **PIN Display**: HomeKit pairing PIN shown prominently
 - View all configured plugs and their current state
 - Toggle plugs on/off with a single click
 - **Connection monitoring**: Visual indicators show plug connectivity status
@@ -198,6 +242,7 @@ Features:
 - **Real-time automatic updates** via Server-Sent Events (SSE)
 - HTMX-powered interface for smooth, reactive UX
 - Works without JavaScript (graceful degradation)
+- **Secure remote access** via Tailscale with automatic TLS
 
 ## Architecture
 

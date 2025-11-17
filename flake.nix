@@ -65,7 +65,7 @@
 
             src = ./.;
 
-            vendorHash = "sha256-7NOPhiZocepjgHsEcSJGbKpqywYZOC7uo6179j+vih0=";
+            vendorHash = "sha256-5wOD08f3SLM2N/TrSo062Swffrv8gdbaVA3O3+9cFo8=";
 
             ldflags = [
               "-s"
@@ -131,13 +131,58 @@
               };
             };
 
+            hap = {
+              pin = mkOption {
+                type = types.str;
+                default = "00102003";
+                description = "HomeKit pairing PIN (8 digits)";
+                example = "12345678";
+              };
+
+              storagePath = mkOption {
+                type = types.str;
+                default = "/var/lib/tasmota-homekit/hap";
+                description = "Path to store HAP pairing data";
+              };
+            };
+
+            plugsConfig = mkOption {
+              type = types.path;
+              description = "Path to the plugs configuration file (HuJSON format)";
+              example = "/etc/tasmota-homekit/plugs.hujson";
+            };
+
+            tailscale = {
+              enable = mkOption {
+                type = types.bool;
+                default = false;
+                description = "Enable Tailscale integration for web interface";
+              };
+
+              hostname = mkOption {
+                type = types.str;
+                default = "tasmota-homekit";
+                description = "Tailscale hostname to use for the service";
+                example = "tasmota-homekit";
+              };
+
+              authKeyFile = mkOption {
+                type = types.nullOr types.path;
+                default = null;
+                description = ''
+                  Path to a file containing the Tailscale auth key.
+                  The content will be passed to the service via the TASMOTA_HOMEKIT_TS_AUTHKEY environment variable.
+                '';
+                example = "/run/secrets/tailscale-authkey";
+              };
+            };
+
             environment = mkOption {
               type = types.attrsOf types.str;
               default = { };
-              description = "Environment variables for the service";
+              description = "Additional environment variables for the service";
               example = {
-                TASMOTA_HOMEKIT_HAP_PIN = "12345678";
-                TASMOTA_HOMEKIT_PLUGS_CONFIG = "/etc/tasmota-homekit/plugs.hujson";
+                TASMOTA_HOMEKIT_TS_HOSTNAME = "my-bridge";
               };
             };
 
@@ -147,32 +192,27 @@
               description = "Environment file for additional configuration (e.g., secrets)";
               example = "/run/secrets/tasmota-homekit.env";
             };
-
-            tailscaleAuthKeyFile = mkOption {
-              type = types.nullOr types.path;
-              default = null;
-              description = ''
-                Path to a file containing the Tailscale auth key.
-                The content will be passed to the service via the TASMOTA_HOMEKIT_TS_AUTHKEY environment variable.
-              '';
-              example = "/run/secrets/tailscale-authkey";
-            };
           };
 
           config = mkIf cfg.enable {
-            # Set default port environment variables if not explicitly set
+            # Set environment variables from NixOS options
             services.tasmota-homekit.environment = {
               TASMOTA_HOMEKIT_HAP_PORT = mkDefault (toString cfg.ports.hap);
               TASMOTA_HOMEKIT_WEB_PORT = mkDefault (toString cfg.ports.web);
               TASMOTA_HOMEKIT_MQTT_PORT = mkDefault (toString cfg.ports.mqtt);
-            };
+              TASMOTA_HOMEKIT_HAP_PIN = mkDefault cfg.hap.pin;
+              TASMOTA_HOMEKIT_HAP_STORAGE_PATH = mkDefault cfg.hap.storagePath;
+              TASMOTA_HOMEKIT_PLUGS_CONFIG = mkDefault (toString cfg.plugsConfig);
+            } // (optionalAttrs cfg.tailscale.enable {
+              TASMOTA_HOMEKIT_TS_HOSTNAME = cfg.tailscale.hostname;
+            });
 
             # Open firewall ports if requested
             networking.firewall = mkIf cfg.openFirewall {
               allowedTCPPorts = [
-                cfg.ports.hap   # HomeKit Accessory Protocol
-                cfg.ports.web   # Web interface
-                cfg.ports.mqtt  # MQTT broker
+                cfg.ports.hap # HomeKit Accessory Protocol
+                cfg.ports.web # Web interface
+                cfg.ports.mqtt # MQTT broker
               ];
             };
 
@@ -241,20 +281,21 @@
                 StandardOutput = "journal";
                 StandardError = "journal";
                 SyslogIdentifier = "tasmota-homekit";
-              } // (optionalAttrs (cfg.tailscaleAuthKeyFile != null) {
-                LoadCredential = "tailscale-authkey:${cfg.tailscaleAuthKeyFile}";
+              } // (optionalAttrs (cfg.tailscale.authKeyFile != null) {
+                LoadCredential = "tailscale-authkey:${cfg.tailscale.authKeyFile}";
               }) // (optionalAttrs (cfg.environmentFile != null) {
                 EnvironmentFile = cfg.environmentFile;
               });
 
               environment = cfg.environment;
 
-              script = if cfg.tailscaleAuthKeyFile != null then ''
-                export TASMOTA_HOMEKIT_TS_AUTHKEY=$(cat $CREDENTIALS_DIRECTORY/tailscale-authkey)
-                exec ${cfg.package}/bin/tasmota-homekit
-              '' else ''
-                exec ${cfg.package}/bin/tasmota-homekit
-              '';
+              script =
+                if cfg.tailscale.authKeyFile != null then ''
+                  export TASMOTA_HOMEKIT_TS_AUTHKEY=$(cat $CREDENTIALS_DIRECTORY/tailscale-authkey)
+                  exec ${cfg.package}/bin/tasmota-homekit
+                '' else ''
+                  exec ${cfg.package}/bin/tasmota-homekit
+                '';
             };
           };
         };
