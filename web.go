@@ -22,10 +22,12 @@ type WebServer struct {
 	sseClients      map[chan string]struct{}
 	sseClientsMu    sync.RWMutex
 	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
+	hapPin          string // HomeKit pairing PIN
+	qrCode          string // HomeKit QR code (terminal format)
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent, bus *eventbus.Bus) *WebServer {
+func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent, bus *eventbus.Bus, hapPin, qrCode string) *WebServer {
 	client := bus.Client("webserver")
 
 	return &WebServer{
@@ -34,6 +36,8 @@ func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent, bus 
 		events:          make([]string, 0, 100),
 		sseClients:      make(map[chan string]struct{}),
 		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
+		hapPin:          hapPin,
+		qrCode:          qrCode,
 	}
 }
 
@@ -196,9 +200,39 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		eventElements = append(eventElements, elem.Div(attrs.Props{attrs.Class: "event"}, elem.Text(ws.events[i])))
 	}
 
+	// Build HomeKit pairing section
+	var homekitSection elem.Node
+	if ws.hapPin != "" {
+		var qrElements []elem.Node
+		qrElements = append(qrElements,
+			elem.H2(nil, elem.Text("HomeKit Pairing")),
+			elem.P(nil, elem.Text(fmt.Sprintf("Pair with PIN: %s", ws.hapPin))),
+		)
+
+		if ws.qrCode != "" {
+			qrElements = append(qrElements,
+				elem.P(nil, elem.Text("Scan this QR code with your iPhone/iPad Home app:")),
+				elem.Pre(attrs.Props{attrs.Style: "font-family: monospace; line-height: 1; font-size: 8px;"},
+					elem.Text(ws.qrCode),
+				),
+			)
+		}
+
+		qrElements = append(qrElements,
+			elem.P(nil,
+				elem.Text("Open the Home app → Add Accessory → More Options → Select 'Tasmota Bridge'"),
+			),
+		)
+
+		homekitSection = elem.Div(attrs.Props{attrs.Class: "homekit-section", attrs.Style: "border: 2px solid #007aff; padding: 20px; margin: 20px 0; border-radius: 8px; background: #f0f8ff;"},
+			qrElements...,
+		)
+	}
+
 	content := elem.Div(nil,
 		elem.H1(nil, elem.Text("Tasmota HomeKit Bridge")),
 		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(ws.plugManager.plugs)))),
+		homekitSection,
 		elem.Div(
 			attrs.Props{
 				"hx-ext":      "sse",

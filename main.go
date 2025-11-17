@@ -12,7 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	"path/filepath"
+
 	env "github.com/Netflix/go-env"
+	homekitqr "github.com/kradalby/homekit-qr"
+	"github.com/kradalby/kra/web"
 	"github.com/tailscale/hujson"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -225,36 +229,107 @@ func main() {
 		}
 	}()
 
-	slog.Info("HomeKit bridge ready - pair with PIN", "pin", config.HAP.PIN)
+	// Print QR code for easy pairing
+	fmt.Println("\n========================================")
+	fmt.Printf("HomeKit bridge ready - pair with PIN: %s\n\n", config.HAP.PIN)
 
-	// Initialize web server
-	webServer := NewWebServer(plugManager, commands, bus)
+	qrConfig := homekitqr.QRCodeConfig{
+		SetupURIConfig: homekitqr.SetupURIConfig{
+			PairingCode: config.HAP.PIN,
+			SetupID:     "4412",
+			Category:    homekitqr.CategoryBridge,
+		},
+	}
+
+	qr, err := homekitqr.GenerateQRTerminal(qrConfig)
+	if err != nil {
+		slog.Warn("Failed to generate QR code", "error", err)
+	} else {
+		fmt.Println(qr)
+	}
+
+	fmt.Println("========================================")
+	slog.Info("Scan QR code or enter PIN manually in Home app", "pin", config.HAP.PIN)
+
+	// Store QR code for web display
+	qrCode := ""
+	if qr != "" {
+		qrCode = qr
+	}
+
+	// Initialize web server with kra/web for Tailscale support
+	webServer := NewWebServer(plugManager, commands, bus, config.HAP.PIN, qrCode)
 	webServer.LogEvent("Server starting...")
 
 	// Start web state change processor for SSE
 	go webServer.ProcessStateChanges(ctx)
 
-	// Create HTTP handlers
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", webServer.HandleIndex)
-	mux.HandleFunc("/toggle/", webServer.HandleToggle)
-	mux.HandleFunc("/events", webServer.HandleSSE)
-
-	// Create HTTP server
-	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.Web.Port),
-		Handler: mux,
+	// Setup kra/web with Tailscale
+	kraOpts := []web.Option{
+		web.WithLogger(log.Default()),
 	}
+
+	// Handle Tailscale auth key - kra/web expects a file path
+	tsKeyPath := ""
+	var tempKeyFile string
+	if config.Tailscale.AuthKey != "" {
+		// Write the auth key to a temporary file
+		tempDir := os.TempDir()
+		tempKeyFile = filepath.Join(tempDir, "tasmota-homekit-tskey")
+		if err := os.WriteFile(tempKeyFile, []byte(config.Tailscale.AuthKey), 0600); err != nil {
+			slog.Warn("Failed to write Tailscale auth key to temp file", "error", err)
+		} else {
+			tsKeyPath = tempKeyFile
+			defer func() {
+				if err := os.Remove(tempKeyFile); err != nil {
+					slog.Warn("Failed to remove temp Tailscale key file", "error", err)
+				}
+			}()
+		}
+	}
+
+	// Enable Tailscale if hostname is set (WithTailscale sets noTS field, so false = enable)
+	enableTailscale := config.Tailscale.Hostname != ""
+	if enableTailscale {
+		kraOpts = append(kraOpts, web.WithTailscale(false)) // false means enable (noTS=false)
+	} else {
+		kraOpts = append(kraOpts, web.WithTailscale(true)) // true means disable (noTS=true)
+	}
+
+	// Set hostname to empty if Tailscale not enabled
+	hostname := config.Tailscale.Hostname
+	if !enableTailscale {
+		hostname = ""
+	}
+
+	kraWeb := web.NewKraWeb(
+		hostname,
+		tsKeyPath,
+		fmt.Sprintf(":%d", config.Web.Port),
+		kraOpts...,
+	)
+
+	// Register handlers
+	kraWeb.Handle("/", http.HandlerFunc(webServer.HandleIndex))
+	kraWeb.Handle("/toggle/", http.HandlerFunc(webServer.HandleToggle))
+	kraWeb.Handle("/events", http.HandlerFunc(webServer.HandleSSE))
 
 	// Start web server in background
 	go func() {
-		slog.Info("Starting web server", "port", config.Web.Port)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Info("Starting web server",
+			"port", config.Web.Port,
+			"tailscale_hostname", config.Tailscale.Hostname,
+		)
+		if err := kraWeb.ListenAndServe(); err != nil {
 			slog.Error("Web server error", "error", err)
 		}
 	}()
 
-	slog.Info("Web UI available", "port", config.Web.Port, "url", fmt.Sprintf("http://localhost:%d", config.Web.Port))
+	webURL := fmt.Sprintf("http://localhost:%d", config.Web.Port)
+	if enableTailscale {
+		webURL = fmt.Sprintf("https://%s (and %s)", config.Tailscale.Hostname, fmt.Sprintf("http://localhost:%d", config.Web.Port))
+	}
+	slog.Info("Web UI available", "url", webURL)
 
 	// Wait for shutdown signal
 	slog.Info("Server running, press Ctrl+C to stop")
@@ -262,13 +337,8 @@ func main() {
 	slog.Info("Shutting down...")
 
 	// Cleanup - graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	slog.Info("Stopping HTTP server...")
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		slog.Error("Error stopping HTTP server", "error", err)
-	}
+	slog.Info("Stopping web server...")
+	// kra/web doesn't have explicit shutdown, will exit with context
 
 	slog.Info("Stopping MQTT broker...")
 	if err := mqttServer.Close(); err != nil {
