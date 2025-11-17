@@ -153,16 +153,13 @@
             };
 
             tailscale = {
-              enable = mkOption {
-                type = types.bool;
-                default = false;
-                description = "Enable Tailscale integration for web interface";
-              };
-
               hostname = mkOption {
                 type = types.str;
-                default = "tasmota-homekit";
-                description = "Tailscale hostname to use for the service";
+                default = "tasmota-nefit";
+                description = ''
+                  Tailscale hostname to use for the service.
+                  Tailscale is enabled when authKeyFile is set.
+                '';
                 example = "tasmota-homekit";
               };
 
@@ -171,6 +168,7 @@
                 default = null;
                 description = ''
                   Path to a file containing the Tailscale auth key.
+                  When set, enables Tailscale integration for secure remote access.
                   The content will be passed to the service via the TASMOTA_HOMEKIT_TS_AUTHKEY environment variable.
                 '';
                 example = "/run/secrets/tailscale-authkey";
@@ -203,9 +201,8 @@
               TASMOTA_HOMEKIT_HAP_PIN = mkDefault cfg.hap.pin;
               TASMOTA_HOMEKIT_HAP_STORAGE_PATH = mkDefault cfg.hap.storagePath;
               TASMOTA_HOMEKIT_PLUGS_CONFIG = mkDefault (toString cfg.plugsConfig);
-            } // (optionalAttrs cfg.tailscale.enable {
-              TASMOTA_HOMEKIT_TS_HOSTNAME = cfg.tailscale.hostname;
-            });
+              TASMOTA_HOMEKIT_TS_HOSTNAME = mkDefault cfg.tailscale.hostname;
+            };
 
             # Open firewall ports if requested
             networking.firewall = mkIf cfg.openFirewall {

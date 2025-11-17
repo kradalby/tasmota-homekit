@@ -117,10 +117,10 @@ Add to your NixOS configuration:
     plugsConfig = /etc/tasmota-homekit/plugs.hujson;
 
     # Optional: Tailscale configuration for remote access
+    # Setting authKeyFile enables Tailscale integration
     tailscale = {
-      enable = true;  # Enable Tailscale integration
-      hostname = "tasmota-homekit";  # Tailscale hostname
-      authKeyFile = "/run/secrets/tailscale-authkey";  # Path to auth key file
+      hostname = "tasmota-nefit";  # Tailscale hostname (default: "tasmota-nefit")
+      authKeyFile = "/run/secrets/tailscale-authkey";  # Path to auth key file (enables Tailscale when set)
     };
 
     # Optional: Additional environment variables
@@ -165,12 +165,12 @@ You can customize the ports using the `ports` option. Port values are automatica
 
 **Tailscale Integration:**
 
-When `tailscale.enable = true`, the web interface is accessible via:
+When `tailscale.authKeyFile` is set, the web interface is accessible via:
 
 - **HTTPS**: `https://<hostname>` (Tailscale with automatic TLS certificates)
 - **HTTP**: `http://localhost:<port>` (local access)
 
-The service uses [kra/web](https://github.com/kradalby/kra) to provide seamless Tailscale integration. The auth key is securely loaded from the file specified in `tailscale.authKeyFile`.
+The service uses [kra/web](https://github.com/kradalby/kra) to provide seamless Tailscale integration. The auth key is securely loaded from the file specified in `tailscale.authKeyFile`. Omit `authKeyFile` to disable Tailscale (local-only mode).
 
 ## How It Works
 
