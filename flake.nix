@@ -133,31 +133,69 @@
           config = mkIf cfg.enable {
             systemd.services.tasmota-homekit = {
               description = "Tasmota HomeKit Bridge";
+              documentation = [ "https://github.com/kradalby/tasmota-homekit" ];
+
+              # Ensure service starts automatically and waits for network
               wantedBy = [ "multi-user.target" ];
-              after = [ "network.target" ];
+              wants = [ "network-online.target" ];
+              after = [ "network-online.target" ];
 
               serviceConfig = {
                 Type = "simple";
-                Restart = "always";
+                Restart = "on-failure";
                 RestartSec = "10s";
+                StartLimitBurst = 5;
+                StartLimitIntervalSec = 60;
 
-                # Security hardening
+                # User and group
                 DynamicUser = true;
+                User = "tasmota-homekit";
+                Group = "tasmota-homekit";
+
+                # Working directory and persistent storage
                 StateDirectory = "tasmota-homekit";
                 CacheDirectory = "tasmota-homekit";
+                RuntimeDirectory = "tasmota-homekit";
+                WorkingDirectory = "/var/lib/tasmota-homekit";
 
-                # Capabilities
+                # Capabilities - only what's needed for binding to privileged ports
                 AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
                 CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
 
-                # Additional security
+                # Security hardening - Filesystem
                 NoNewPrivileges = true;
                 PrivateTmp = true;
                 ProtectSystem = "strict";
                 ProtectHome = true;
+                ReadWritePaths = [ "/var/lib/tasmota-homekit" "/var/cache/tasmota-homekit" ];
+
+                # Security hardening - Kernel
                 ProtectKernelTunables = true;
                 ProtectKernelModules = true;
+                ProtectKernelLogs = true;
                 ProtectControlGroups = true;
+
+                # Security hardening - Process
+                RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+                RestrictNamespaces = true;
+                RestrictRealtime = true;
+                RestrictSUIDSGID = true;
+                LockPersonality = true;
+                PrivateDevices = true;
+                ProtectClock = true;
+                ProtectHostname = true;
+                ProtectProc = "invisible";
+                ProcSubset = "pid";
+                RemoveIPC = true;
+
+                # Security hardening - System calls
+                SystemCallArchitectures = "native";
+                SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+
+                # Logging
+                StandardOutput = "journal";
+                StandardError = "journal";
+                SyslogIdentifier = "tasmota-homekit";
               } // (optionalAttrs (cfg.tailscaleAuthKeyFile != null) {
                 LoadCredential = "tailscale-authkey:${cfg.tailscaleAuthKeyFile}";
               }) // (optionalAttrs (cfg.environmentFile != null) {
