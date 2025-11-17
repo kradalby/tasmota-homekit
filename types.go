@@ -19,7 +19,7 @@ type Config struct {
 	}
 
 	Tailscale struct {
-		Hostname string `env:"TASMOTA_HOMEKIT_TS_HOSTNAME"`
+		Hostname string `env:"TASMOTA_HOMEKIT_TS_HOSTNAME,default=tasmota-nefit"`
 		AuthKey  string `env:"TASMOTA_HOMEKIT_TS_AUTHKEY"`
 	}
 

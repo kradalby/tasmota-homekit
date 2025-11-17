@@ -270,14 +270,18 @@ func main() {
 	}
 
 	// Handle Tailscale auth key - kra/web expects a file path
+	// Tailscale is enabled when authKey is present
 	tsKeyPath := ""
 	var tempKeyFile string
-	if config.Tailscale.AuthKey != "" {
+	enableTailscale := config.Tailscale.AuthKey != ""
+
+	if enableTailscale {
 		// Write the auth key to a temporary file
 		tempDir := os.TempDir()
 		tempKeyFile = filepath.Join(tempDir, "tasmota-homekit-tskey")
 		if err := os.WriteFile(tempKeyFile, []byte(config.Tailscale.AuthKey), 0600); err != nil {
 			slog.Warn("Failed to write Tailscale auth key to temp file", "error", err)
+			enableTailscale = false
 		} else {
 			tsKeyPath = tempKeyFile
 			defer func() {
@@ -288,18 +292,17 @@ func main() {
 		}
 	}
 
-	// Enable Tailscale if hostname is set (WithTailscale sets noTS field, so false = enable)
-	enableTailscale := config.Tailscale.Hostname != ""
+	// Enable Tailscale if authKey is set (WithTailscale sets noTS field, so false = enable)
 	if enableTailscale {
 		kraOpts = append(kraOpts, web.WithTailscale(false)) // false means enable (noTS=false)
 	} else {
 		kraOpts = append(kraOpts, web.WithTailscale(true)) // true means disable (noTS=true)
 	}
 
-	// Set hostname to empty if Tailscale not enabled
-	hostname := config.Tailscale.Hostname
-	if !enableTailscale {
-		hostname = ""
+	// Set hostname - use configured hostname if Tailscale enabled, empty otherwise
+	hostname := ""
+	if enableTailscale {
+		hostname = config.Tailscale.Hostname
 	}
 
 	kraWeb := web.NewKraWeb(
