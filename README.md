@@ -70,6 +70,17 @@ See `.env.example` for all available options.
 
 ## NixOS Deployment
 
+The NixOS module includes comprehensive security hardening and follows systemd best practices:
+
+**Features:**
+- ✅ Automatic startup with `multi-user.target`
+- ✅ Waits for network to be online before starting
+- ✅ Automatic restart on failure (max 5 attempts per minute)
+- ✅ Full systemd security hardening (filesystem isolation, syscall filtering, etc.)
+- ✅ Dedicated dynamic user with minimal privileges
+- ✅ Persistent state and cache directories
+- ✅ Secure credential loading for secrets
+
 Add to your NixOS configuration:
 
 ```nix
@@ -97,6 +108,24 @@ Add to your NixOS configuration:
   };
 }
 ```
+
+**Service Management:**
+
+```bash
+# Check service status
+systemctl status tasmota-homekit
+
+# View logs
+journalctl -u tasmota-homekit -f
+
+# Restart service
+systemctl restart tasmota-homekit
+```
+
+**Storage Locations:**
+- State: `/var/lib/tasmota-homekit/`
+- Cache: `/var/cache/tasmota-homekit/`
+- Runtime: `/run/tasmota-homekit/`
 
 ## How It Works
 
