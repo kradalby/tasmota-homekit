@@ -1,10 +1,11 @@
-package main
+package tasmotahomekit
 
 import (
 	"context"
 	"log/slog"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/kradalby/tasmota-nefit/plugs"
 	"tailscale.com/util/eventbus"
 )
 
@@ -12,16 +13,16 @@ import (
 type HAPManager struct {
 	bridge          *accessory.Bridge
 	outlets         map[string]*accessory.Outlet
-	commands        chan PlugCommandEvent
-	plugManager     *PlugManager
-	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
+	commands        chan plugs.CommandEvent
+	plugManager     *plugs.Manager
+	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
 }
 
 // NewHAPManager creates a new HAP manager with accessories for all plugs
 func NewHAPManager(
-	plugConfigs []Plug,
-	commands chan PlugCommandEvent,
-	plugManager *PlugManager,
+	plugConfigs []plugs.Plug,
+	commands chan plugs.CommandEvent,
+	plugManager *plugs.Manager,
 	bus *eventbus.Bus,
 ) *HAPManager {
 	client := bus.Client("hapmanager")
@@ -39,7 +40,7 @@ func NewHAPManager(
 		outlets:         make(map[string]*accessory.Outlet),
 		commands:        commands,
 		plugManager:     plugManager,
-		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
+		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
 	}
 
 	// Create outlet accessory for each plug
@@ -59,7 +60,7 @@ func NewHAPManager(
 			slog.Info("HomeKit command received", "plug_id", plugID, "on", on)
 
 			// Send command through event channel
-			commands <- PlugCommandEvent{
+			commands <- plugs.CommandEvent{
 				PlugID: plugID,
 				On:     on,
 			}
@@ -99,6 +100,16 @@ func (hm *HAPManager) UpdateState(plugID string, on bool) {
 }
 
 // ProcessStateChanges listens for state changes and updates HomeKit
+// Start begins processing state changes.
+func (hm *HAPManager) Start(ctx context.Context) {
+	go hm.ProcessStateChanges(ctx)
+}
+
+// Close releases subscriptions.
+func (hm *HAPManager) Close() {
+	hm.stateSubscriber.Close()
+}
+
 func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 	for {
 		select {

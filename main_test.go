@@ -1,36 +1,13 @@
-package main
+package tasmotahomekit
 
 import (
 	"testing"
+
+	"github.com/kradalby/tasmota-nefit/plugs"
 )
 
-func TestLoadConfig(t *testing.T) {
-	config, err := loadConfig()
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Check defaults are set
-	if config.HAP.PIN == "" {
-		t.Error("HAP PIN should have a default value")
-	}
-
-	if config.HAP.Port != 8080 {
-		t.Errorf("Expected HAP port 8080, got %d", config.HAP.Port)
-	}
-
-	if config.Web.Port != 8081 {
-		t.Errorf("Expected web port 8081, got %d", config.Web.Port)
-	}
-
-	if config.MQTT.Port != 1883 {
-		t.Errorf("Expected MQTT port 1883, got %d", config.MQTT.Port)
-	}
-}
-
 func TestLoadPlugsConfig(t *testing.T) {
-	// Test with the example config
-	config, err := loadPlugsConfig("./plugs.hujson.example")
+	config, err := plugs.LoadConfig("./plugs.hujson.example")
 	if err != nil {
 		t.Fatalf("Failed to load plugs config: %v", err)
 	}
