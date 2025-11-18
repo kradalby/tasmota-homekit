@@ -5,7 +5,7 @@ help: ## Show this help message
 
 .PHONY: build
 build: ## Build the binary
-	go build -o tasmota-homekit .
+	go build -o tasmota-homekit ./cmd/tasmota-homekit
 
 .PHONY: test
 test: ## Run tests
@@ -32,7 +32,7 @@ tidy: ## Tidy go modules
 
 .PHONY: dev
 dev: ## Run in development mode
-	go run .
+	go run ./cmd/tasmota-homekit
 
 .PHONY: clean
 clean: ## Clean build artifacts

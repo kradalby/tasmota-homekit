@@ -1,11 +1,9 @@
 # prek/pre-commit configuration for tasmota-homekit
-# See: https://prek.j178.dev/quickstart/
-# See: https://prek.j178.dev/builtin/
+# Hooks expect to run inside `nix develop`
+
+exclude: ^(result/|\.direnv/)
 
 repos:
-  # Built-in hooks from pre-commit/pre-commit-hooks
-  # prek will use fast-path optimized versions automatically
-  # See: https://prek.j178.dev/builtin/
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
@@ -23,34 +21,29 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
 
-  # Local hooks for project-specific tooling
   - repo: local
     hooks:
-      # nixpkgs-fmt for Nix files
       - id: nixpkgs-fmt
         name: nixpkgs-fmt
         entry: nixpkgs-fmt
         language: system
         files: \.nix$
 
-      # Prettier for formatting (JSON, YAML, Markdown)
       - id: prettier
         name: prettier
         entry: prettier --write --list-different
         language: system
         types_or: [yaml, json, markdown]
 
-      # Go formatting
       - id: gofmt
         name: gofmt
         entry: gofmt -w
         language: system
         types: [go]
 
-      # golangci-lint for Go code quality
       - id: golangci-lint
         name: golangci-lint
-        entry: .golangci-lint-hook.sh
+        entry: golangci-lint run --new-from-rev=HEAD~1
         language: system
         types: [go]
         pass_filenames: false
