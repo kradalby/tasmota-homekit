@@ -1,41 +1,57 @@
-package main
+package tasmotahomekit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/chasefleming/elem-go"
 	"github.com/chasefleming/elem-go/attrs"
+	"github.com/kradalby/kra/web"
+	"github.com/kradalby/tasmota-nefit/plugs"
 	"tailscale.com/util/eventbus"
 )
 
+type plugStateProvider interface {
+	Snapshot() map[string]struct {
+		Plug  plugs.Plug
+		State plugs.State
+	}
+	Plug(string) (plugs.Plug, plugs.State, bool)
+}
+
 // WebServer manages the web UI
 type WebServer struct {
-	plugManager     *PlugManager
-	commands        chan PlugCommandEvent
-	events          []string // Simple event log for debugging
+	logger          *slog.Logger
+	kraweb          *web.KraWeb
+	plugProvider    plugStateProvider
+	commands        chan plugs.CommandEvent
+	events          []string
 	sseClients      map[chan string]struct{}
 	sseClientsMu    sync.RWMutex
-	stateSubscriber *eventbus.Subscriber[PlugStateChangedEvent]
-	hapPin          string // HomeKit pairing PIN
-	qrCode          string // HomeKit QR code (terminal format)
+	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
+	hapPin          string
+	qrCode          string
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(plugManager *PlugManager, commands chan PlugCommandEvent, bus *eventbus.Bus, hapPin, qrCode string) *WebServer {
+func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, commands chan plugs.CommandEvent, bus *eventbus.Bus, kraweb *web.KraWeb, hapPin, qrCode string) *WebServer {
 	client := bus.Client("webserver")
 
 	return &WebServer{
-		plugManager:     plugManager,
+		logger:          logger,
+		kraweb:          kraweb,
+		plugProvider:    plugProvider,
 		commands:        commands,
 		events:          make([]string, 0, 100),
 		sseClients:      make(map[chan string]struct{}),
-		stateSubscriber: eventbus.Subscribe[PlugStateChangedEvent](client),
+		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
 		hapPin:          hapPin,
 		qrCode:          qrCode,
 	}
@@ -63,12 +79,33 @@ func (ws *WebServer) broadcastSSE(message string) {
 	}
 }
 
-// ProcessStateChanges listens for state changes and broadcasts them via SSE
-func (ws *WebServer) ProcessStateChanges(ctx context.Context) {
+func (ws *WebServer) Start(ctx context.Context) {
+	go ws.processStateChanges(ctx)
+
+	go func() {
+		ws.logger.Info("Starting web interface")
+		if err := ws.kraweb.ListenAndServe(ctx); err != nil {
+			ws.logger.Error("Web server error", slog.Any("error", err))
+		}
+	}()
+}
+
+func (ws *WebServer) Close() {
+	ws.stateSubscriber.Close()
+
+	ws.sseClientsMu.Lock()
+	for client := range ws.sseClients {
+		close(client)
+	}
+	ws.sseClients = make(map[chan string]struct{})
+	ws.sseClientsMu.Unlock()
+}
+
+func (ws *WebServer) processStateChanges(ctx context.Context) {
 	for {
 		select {
 		case event := <-ws.stateSubscriber.Events():
-			slog.Debug("Web UI: State change received", "plug_id", event.PlugID, "on", event.State.On)
+			ws.logger.Debug("Web UI: State change received", "plug_id", event.PlugID, "on", event.State.On)
 			ws.broadcastSSE(event.PlugID)
 		case <-ctx.Done():
 			return
@@ -114,7 +151,7 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 }
 
 // renderPlugCard renders a single plug card element
-func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugState) elem.Node {
+func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.State) elem.Node {
 	statusClass := "off"
 	statusText := "OFF"
 	buttonClass := "off"
@@ -156,7 +193,7 @@ func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugSt
 			"hx-swap":   "outerHTML",
 		},
 		elem.Div(attrs.Props{attrs.Class: "plug-info"},
-			elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Config.Name)),
+			elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
 			elem.Div(attrs.Props{attrs.Class: "plug-status"},
 				elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
 					statusText,
@@ -187,12 +224,17 @@ func (ws *WebServer) renderPlugCard(plugID string, info *PlugInfo, state *PlugSt
 func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	var plugElements []elem.Node
 
-	ws.plugManager.statesMu.RLock()
-	for id, info := range ws.plugManager.plugs {
-		state := ws.plugManager.states[id]
-		plugElements = append(plugElements, ws.renderPlugCard(id, info, state))
+	snapshot := ws.plugProvider.Snapshot()
+	var plugIDs []string
+	for id := range snapshot {
+		plugIDs = append(plugIDs, id)
 	}
-	ws.plugManager.statesMu.RUnlock()
+	sort.Strings(plugIDs)
+
+	for _, id := range plugIDs {
+		item := snapshot[id]
+		plugElements = append(plugElements, ws.renderPlugCard(id, item.Plug, item.State))
+	}
 
 	// Add event log
 	var eventElements []elem.Node
@@ -231,7 +273,7 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 
 	content := elem.Div(nil,
 		elem.H1(nil, elem.Text("Tasmota HomeKit Bridge")),
-		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(ws.plugManager.plugs)))),
+		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(snapshot)))),
 		homekitSection,
 		elem.Div(
 			attrs.Props{
@@ -248,7 +290,7 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html")
 	if _, err := fmt.Fprint(w, ws.renderPage("Tasmota HomeKit", content)); err != nil {
-		slog.Error("Failed to write response", "error", err)
+		ws.logger.Error("Failed to write response", slog.Any("error", err))
 	}
 }
 
@@ -263,7 +305,7 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/toggle/")
 	plugID := path
 
-	info, exists := ws.plugManager.plugs[plugID]
+	plug, state, exists := ws.plugProvider.Plug(plugID)
 	if !exists {
 		http.Error(w, "Plug not found", http.StatusNotFound)
 		return
@@ -272,7 +314,7 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	action := r.FormValue("action")
 	on := action == "on"
 
-	ws.commands <- PlugCommandEvent{
+	ws.commands <- plugs.CommandEvent{
 		PlugID: plugID,
 		On:     on,
 	}
@@ -284,13 +326,14 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 		// Wait a moment for the state to update
 		time.Sleep(100 * time.Millisecond)
 
-		ws.plugManager.statesMu.RLock()
-		state := ws.plugManager.states[plugID]
-		ws.plugManager.statesMu.RUnlock()
+		if updatedPlug, updatedState, ok := ws.plugProvider.Plug(plugID); ok {
+			plug = updatedPlug
+			state = updatedState
+		}
 
 		w.Header().Set("Content-Type", "text/html")
-		if _, err := fmt.Fprint(w, ws.renderPlugCard(plugID, info, state).Render()); err != nil {
-			slog.Error("Failed to write response", "error", err)
+		if _, err := fmt.Fprint(w, ws.renderPlugCard(plugID, plug, state).Render()); err != nil {
+			ws.logger.Error("Failed to write response", slog.Any("error", err))
 		}
 		return
 	}
@@ -333,33 +376,76 @@ func (ws *WebServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case plugID := <-clientChan:
-			// Get current state
-			ws.plugManager.statesMu.RLock()
-			info, infoExists := ws.plugManager.plugs[plugID]
-			state, stateExists := ws.plugManager.states[plugID]
-			ws.plugManager.statesMu.RUnlock()
-
-			if !infoExists || !stateExists {
+			plug, state, ok := ws.plugProvider.Plug(plugID)
+			if !ok {
 				continue
 			}
 
-			// Render the plug card
-			html := ws.renderPlugCard(plugID, info, state).Render()
+			html := ws.renderPlugCard(plugID, plug, state).Render()
 
-			// Send SSE event with the plug ID as the event name
 			if _, err := fmt.Fprintf(w, "event: %s\n", plugID); err != nil {
-				slog.Error("Failed to write SSE event", "error", err)
+				ws.logger.Error("Failed to write SSE event", slog.Any("error", err))
 				return
 			}
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", html); err != nil {
-				slog.Error("Failed to write SSE data", "error", err)
+				ws.logger.Error("Failed to write SSE data", slog.Any("error", err))
 				return
 			}
 			flusher.Flush()
 
 		case <-r.Context().Done():
-			// Client disconnected
 			return
 		}
+	}
+}
+
+// HandleHealth exposes a JSON health summary that matches nefit-homekit.
+func (ws *WebServer) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	snapshot := ws.plugProvider.Snapshot()
+
+	ws.sseClientsMu.RLock()
+	sseClients := len(ws.sseClients)
+	ws.sseClientsMu.RUnlock()
+
+	resp := struct {
+		Status     string    `json:"status"`
+		Plugs      int       `json:"plugs"`
+		SSEClients int       `json:"sse_clients"`
+		Timestamp  time.Time `json:"timestamp"`
+	}{
+		Status:     "ok",
+		Plugs:      len(snapshot),
+		SSEClients: sseClients,
+		Timestamp:  time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		ws.logger.Error("Failed to write health response", slog.Any("error", err))
+	}
+}
+
+// HandleQRCode renders the current HomeKit QR code for terminal access.
+func (ws *WebServer) HandleQRCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if ws.qrCode == "" {
+		if _, err := fmt.Fprintf(w, "HomeKit PIN: %s\nQR code is not available on this host.\n", ws.hapPin); err != nil {
+			ws.logger.Error("failed to render QR fallback", slog.Any("error", err))
+		}
+		return
+	}
+
+	if _, err := fmt.Fprintf(w, "HomeKit PIN: %s\n\n%s\n", ws.hapPin, ws.qrCode); err != nil {
+		ws.logger.Error("failed to render QR code", slog.Any("error", err))
 	}
 }
