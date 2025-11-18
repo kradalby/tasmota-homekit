@@ -109,10 +109,13 @@
             };
           };
 
-          checks = {
-            package = self.packages.${system}.default;
-            module-test = import ./nix/test.nix { inherit pkgs system self; };
-          };
+          checks =
+            {
+              package = self.packages.${system}.default;
+            }
+            // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+              module-test = import ./nix/test.nix { inherit pkgs system self; };
+            };
         }
       ) // {
       nixosModules.default = import ./nix/module.nix;
