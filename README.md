@@ -26,20 +26,29 @@ Control your Tasmota smart plugs through Apple HomeKit and a simple web interfac
 # Enter development shell
 nix develop
 
-# Run tests
-make test
-
-# Run linter
-make lint
-
-# Build
-make build
+# Quick commands (flake apps)
+nix run .#test          # go test ./...
+nix run .#test-race     # go test -race
+nix run .#lint          # golangci-lint
+nix run .#coverage      # HTML coverage report
+nix flake check         # NixOS module + packaging checks
+nix build .#tasmota-homekit
 
 # Run in development mode
-make dev
+go run ./cmd/tasmota-homekit
+
+# Run via Nix
+nix run .#tasmota-homekit
 ```
 
 ## Configuration
+
+### Project Layout
+
+- `cmd/tasmota-homekit`: entrypoint that wires everything together
+- `config`: environment configuration loader/validator
+- `plugs`: plug configuration, state management, MQTT integration
+- `hap.go`, `web.go`, `mqtt.go`: runtime components that consume the shared packages
 
 ### Plug Configuration
 
@@ -67,7 +76,22 @@ TASMOTA_HOMEKIT_HAP_PORT=8080
 TASMOTA_HOMEKIT_PLUGS_CONFIG=./plugs.hujson
 ```
 
-See `.env.example` for all available options.
+For NixOS, convert that file into `/etc/tasmota-homekit/env` (or an agenix secret) and point `services.tasmota-homekit.environmentFile` at it so the module loads the same values that the CLI uses during development.
+
+See `.env.example` for the full list of options.
+
+### Web Interface & Endpoints
+
+The embedded kra web server exposes a consistent set of endpoints (locally and over Tailscale):
+
+- `/` – elem-go dashboard with plug controls, event log, and HomeKit QR code.
+- `/toggle/<plug-id>` – HTMX form to toggle a specific plug.
+- `/events` – SSE stream used by the dashboard for realtime updates.
+- `/health` – JSON health summary (plug count, SSE clients).
+- `/metrics` – Prometheus metrics (register your collector here).
+- `/qrcode` – Plain-text QR/PIN output for headless setups.
+
+Set `TASMOTA_HOMEKIT_TS_AUTHKEY` and `TASMOTA_HOMEKIT_TS_HOSTNAME` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed.
 
 ## NixOS Deployment
 
@@ -75,15 +99,15 @@ The NixOS module includes comprehensive security hardening and follows systemd b
 
 **Features:**
 
-- ✅ Automatic startup with `multi-user.target`
-- ✅ Waits for network to be online before starting
-- ✅ Automatic restart on failure (max 5 attempts per minute)
-- ✅ Full systemd security hardening (filesystem isolation, syscall filtering, etc.)
-- ✅ Dedicated dynamic user with minimal privileges
-- ✅ Persistent state and cache directories
-- ✅ Secure credential loading for secrets
-- ✅ Built-in Tailscale integration for secure remote access
-- ✅ HomeKit QR code displayed in terminal and web interface
+- Automatic startup with `multi-user.target`
+- Waits for network to be online before starting
+- Automatic restart on failure (max 5 attempts per minute)
+- Systemd security hardening (filesystem isolation, syscall filtering, etc.)
+- Dedicated dynamic user with minimal privileges
+- Persistent state and cache directories
+- Secure credential loading for secrets
+- Built-in Tailscale integration for secure remote access
+- HomeKit QR code displayed in terminal and web interface
 
 Add to your NixOS configuration:
 
@@ -172,6 +196,42 @@ When `tailscale.authKeyFile` is set, the web interface is accessible via:
 
 The service uses [kra/web](https://github.com/kradalby/kra) to provide seamless Tailscale integration. The auth key is securely loaded from the file specified in `tailscale.authKeyFile`. Omit `authKeyFile` to disable Tailscale (local-only mode).
 
+### Available Options
+
+```
+services.tasmota-homekit.enable             # Enable the service
+services.tasmota-homekit.package            # Package derivation (defaults to pkgs.tasmota-homekit)
+services.tasmota-homekit.environmentFile    # Path to file containing TASMOTA_HOMEKIT_* values
+services.tasmota-homekit.environment        # Attrset of extra TASMOTA_HOMEKIT_* overrides
+services.tasmota-homekit.ports.hap          # HAP port (default 8080)
+services.tasmota-homekit.ports.web          # Web UI port (default 8081)
+services.tasmota-homekit.ports.mqtt         # Embedded MQTT broker port (default 1883)
+services.tasmota-homekit.hap.pin            # HomeKit PIN (8 digits)
+services.tasmota-homekit.hap.storagePath    # Directory for pairing data and runtime state
+services.tasmota-homekit.plugsConfig        # HuJSON description of plugs
+services.tasmota-homekit.log.level          # slog level (debug/info/warn/error)
+services.tasmota-homekit.log.format         # slog format (json/console)
+services.tasmota-homekit.tailscale.hostname # Tailnet hostname
+services.tasmota-homekit.tailscale.authKeyFile # Credential used for Tailscale auth
+services.tasmota-homekit.openFirewall       # Open HAP/web/MQTT and mDNS ports automatically
+services.tasmota-homekit.user               # Service user (default tasmota-homekit)
+services.tasmota-homekit.group              # Service group (default tasmota-homekit)
+```
+
+Use the module options instead of ad-hoc environment variables so deployments stay consistent with the README and CI.
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` enforces the same workflow used locally:
+
+- `go test -v ./...` with coverage on Linux and macOS
+- `go test -race ./...`
+- `golangci-lint run ./...`
+- `nix build .#tasmota-homekit`
+- `nix flake check` followed by the module smoke test
+
+Run the flake apps (`nix run .#test`, `nix run .#test-race`, `nix run .#lint`, `nix flake check`) before pushing so GitHub Actions stays green.
+
 ## How It Works
 
 1. **Startup**: Server connects to all configured Tasmota plugs and configures them to use the embedded MQTT broker
@@ -195,8 +255,6 @@ HomeKit bridge ready - pair with PIN: 00102003
 
 ========================================
 ```
-
-The QR code is also available on the web interface for easy pairing.
 
 **To add to HomeKit:**
 
