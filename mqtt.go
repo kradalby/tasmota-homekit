@@ -1,4 +1,4 @@
-package main
+package tasmotahomekit
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kradalby/tasmota-nefit/plugs"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"tailscale.com/util/eventbus"
@@ -37,7 +38,7 @@ func getLocalIP() (string, error) {
 // MQTTHook handles MQTT messages from Tasmota devices
 type MQTTHook struct {
 	mqtt.HookBase
-	statePublisher *eventbus.Publisher[PlugStateChangedEvent]
+	statePublisher *eventbus.Publisher[plugs.StateChangedEvent]
 }
 
 // ID returns the hook identifier
@@ -122,7 +123,7 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 
 	// Create partial state update with the information we have from MQTT
 	now := time.Now()
-	partialState := PlugState{
+	partialState := plugs.State{
 		ID:            plugID,
 		MQTTConnected: true,
 		LastSeen:      now,
@@ -144,7 +145,7 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	// Publish to eventbus - PlugManager will merge with its state
-	h.statePublisher.Publish(PlugStateChangedEvent{
+	h.statePublisher.Publish(plugs.StateChangedEvent{
 		PlugID: plugID,
 		State:  partialState,
 	})
