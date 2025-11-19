@@ -240,7 +240,7 @@ in
             PrivateDevices = true;
             ProtectHostname = true;
             ProtectClock = true;
-            RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+            RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_NETLINK" ];
             RestrictNamespaces = true;
             RestrictRealtime = true;
             RestrictSUIDSGID = true;
