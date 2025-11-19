@@ -300,24 +300,44 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 				attrs.Src: "https://unpkg.com/htmx.org@2.0.4",
 			}),
 			elem.Style(nil, elem.Text(`
-				body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 0 20px; }
-				h1 { color: #333; }
-				.plug { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
-				.plug.on { background: #e8f5e9; }
-				.plug.off { background: #ffebee; }
+				body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; background: #f7f9fc; color: #1f2933; }
+				h1 { color: #0f172a; margin-bottom: 6px; }
+				p { color: #475569; margin-bottom: 4px; }
+				.plugs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
+				@media (max-width: 900px) { .plugs-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); } }
+				.plug { border: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 16px; min-height: 230px; background: white; box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+				.plug:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1); }
+				.plug.on { background: #ecfdf5; border-color: #34d399; }
+				.plug.off { background: #fef2f2; border-color: #f87171; }
 				.plug-info { flex: 1; }
-				.plug-name { font-size: 1.2em; font-weight: 500; }
-				.plug-status { font-size: 0.9em; color: #666; margin-top: 4px; }
-				.connection-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 0.85em; }
+				.plug-name { font-size: 1.1em; font-weight: 600; color: #0f172a; }
+				.plug-status { font-size: 0.9em; color: #475569; margin-top: 4px; }
+				.connection-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 0.85em; color: #475569; }
 				.connection-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-				.connection-indicator.connected { background: #4caf50; }
-				.connection-indicator.stale { background: #ff9800; }
-				.connection-indicator.disconnected { background: #f44336; }
-				button { padding: 10px 20px; font-size: 1em; cursor: pointer; border: none; border-radius: 4px; }
-				button.on { background: #4caf50; color: white; }
-				button.off { background: #f44336; color: white; }
-				.events { margin-top: 40px; padding: 20px; background: #f5f5f5; border-radius: 8px; max-height: 300px; overflow-y: auto; }
-				.event { font-family: monospace; font-size: 0.9em; padding: 4px 0; }
+				.connection-indicator.connected { background: #22c55e; }
+				.connection-indicator.stale { background: #facc15; }
+				.connection-indicator.disconnected { background: #ef4444; }
+				form { width: 100%; }
+				button { width: 100%; padding: 12px 16px; font-size: 1em; cursor: pointer; border: none; border-radius: 8px; font-weight: 600; transition: opacity 0.2s ease; }
+				button:hover { opacity: 0.95; }
+				button.on { background: #16a34a; color: white; }
+				button.off { background: #dc2626; color: white; }
+				.events { margin-top: 40px; padding: 20px; background: white; border-radius: 12px; max-height: 320px; overflow-y: auto; box-shadow: inset 0 0 0 1px #e2e8f0; }
+				.event { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.9em; padding: 4px 0; color: #475569; }
+				.homekit-banner { border: 2px solid #0a84ff; border-radius: 14px; background: #eef5ff; margin: 20px 0; box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08); }
+				.homekit-banner summary { cursor: pointer; padding: 16px 20px; font-weight: 600; color: #0f172a; display: flex; justify-content: space-between; align-items: center; }
+				.homekit-banner summary::-webkit-details-marker { display: none; }
+				.homekit-summary-caption { font-size: 0.9em; color: #475569; font-weight: 500; }
+				.homekit-banner[open] summary { border-bottom: 1px solid #c7dbff; }
+				.homekit-banner-content { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+				.homekit-pin { display: flex; flex-direction: column; }
+				.homekit-pin-label { font-size: 0.85em; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; }
+				.homekit-pin-value { font-size: 2em; font-weight: 700; color: #0f172a; letter-spacing: 0.08em; }
+				.qr-code-block { overflow-x: auto; }
+				.qr-code { font-family: "SFMono-Regular", Consolas, monospace; line-height: 1; font-size: 8px; background: white; padding: 12px; border-radius: 8px; border: 1px solid #c7dbff; display: inline-block; }
+				.homekit-instructions { color: #475569; margin: 0; }
+				.homekit-link { color: #0a84ff; font-weight: 600; text-decoration: none; }
+				.homekit-link:hover { text-decoration: underline; }
 			`)),
 			elem.Script(nil, elem.Text(sseScript)),
 		),
@@ -420,29 +440,44 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	// Build HomeKit pairing section
 	var homekitSection elem.Node
 	if ws.hapPin != "" {
-		var qrElements []elem.Node
-		qrElements = append(qrElements,
-			elem.H2(nil, elem.Text("HomeKit Pairing")),
-			elem.P(nil, elem.Text(fmt.Sprintf("Pair with PIN: %s", ws.hapPin))),
+		var qrContent []elem.Node
+		qrContent = append(qrContent,
+			elem.Div(attrs.Props{attrs.Class: "homekit-pin"},
+				elem.Span(attrs.Props{attrs.Class: "homekit-pin-label"}, elem.Text("Setup PIN")),
+				elem.Span(attrs.Props{attrs.Class: "homekit-pin-value"}, elem.Text(ws.hapPin)),
+			),
 		)
 
 		if ws.qrCode != "" {
-			qrElements = append(qrElements,
-				elem.P(nil, elem.Text("Scan this QR code with your iPhone/iPad Home app:")),
-				elem.Pre(attrs.Props{attrs.Style: "font-family: monospace; line-height: 1; font-size: 8px;"},
-					elem.Text(ws.qrCode),
+			qrContent = append(qrContent,
+				elem.Div(attrs.Props{attrs.Class: "qr-code-block"},
+					elem.Pre(attrs.Props{attrs.Class: "qr-code"}, elem.Text(ws.qrCode)),
+				),
+				elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+					elem.Text("Scan the QR code from the Home app or camera on your iPhone/iPad."),
+				),
+			)
+		} else {
+			qrContent = append(qrContent,
+				elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+					elem.Text("QR code is not available on this host. Use the PIN above in the Home app."),
 				),
 			)
 		}
 
-		qrElements = append(qrElements,
-			elem.P(nil,
-				elem.Text("Open the Home app → Add Accessory → More Options → Select 'Tasmota Bridge'"),
+		qrContent = append(qrContent,
+			elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+				elem.Text("Home app → Add Accessory → More Options → Select \"Tasmota Bridge\"."),
 			),
+			elem.A(attrs.Props{attrs.Href: "/qrcode", attrs.Class: "homekit-link"}, elem.Text("Open standalone QR view")),
 		)
 
-		homekitSection = elem.Div(attrs.Props{attrs.Class: "homekit-section", attrs.Style: "border: 2px solid #007aff; padding: 20px; margin: 20px 0; border-radius: 8px; background: #f0f8ff;"},
-			qrElements...,
+		homekitSection = elem.Details(attrs.Props{attrs.Class: "homekit-banner"},
+			elem.Summary(nil,
+				elem.Span(attrs.Props{attrs.Class: "homekit-summary-title"}, elem.Text("HomeKit Pairing")),
+				elem.Span(attrs.Props{attrs.Class: "homekit-summary-caption"}, elem.Text("Tap to reveal setup PIN & QR code")),
+			),
+			elem.Div(attrs.Props{attrs.Class: "homekit-banner-content"}, qrContent...),
 		)
 	}
 
@@ -450,7 +485,7 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		elem.H1(nil, elem.Text("Tasmota HomeKit Bridge")),
 		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(snapshot)))),
 		homekitSection,
-		elem.Div(nil, plugElements...),
+		elem.Div(attrs.Props{attrs.Class: "plugs-grid"}, plugElements...),
 		elem.Div(attrs.Props{attrs.Class: "events"},
 			elem.H2(nil, elem.Text("Recent Events")),
 			elem.Div(nil, eventElements...),
