@@ -295,6 +295,8 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 
 	page := elem.Html(nil,
 		elem.Head(nil,
+			elem.Meta(attrs.Props{attrs.Charset: "utf-8"}),
+			elem.Meta(attrs.Props{attrs.Name: "viewport", attrs.Content: "width=device-width, initial-scale=1"}),
 			elem.Title(nil, elem.Text(title)),
 			elem.Script(attrs.Props{
 				attrs.Src: "https://unpkg.com/htmx.org@2.0.4",
