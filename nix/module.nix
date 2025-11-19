@@ -249,8 +249,6 @@ in
             RestrictSUIDSGID = true;
             LockPersonality = true;
             RemoveIPC = true;
-            ProtectProc = "invisible";
-            ProcSubset = "pid";
             SystemCallArchitectures = "native";
             SystemCallFilter = [
               "@system-service"
