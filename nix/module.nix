@@ -205,6 +205,11 @@ in
           wants = [ "network-online.target" ];
           after = [ "network-online.target" ];
 
+          unitConfig = {
+            StartLimitIntervalSec = "5min";
+            StartLimitBurst = 5;
+          };
+
           restartTriggers =
             [ cfg.package cfg.plugsConfig ]
             ++ optional (cfg.environmentFile != null) cfg.environmentFile;
@@ -219,8 +224,6 @@ in
 
             Restart = "on-failure";
             RestartSec = "10s";
-            StartLimitIntervalSec = "5min";
-            StartLimitBurst = 5;
 
             WorkingDirectory = cfg.hap.storagePath;
 

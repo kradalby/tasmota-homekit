@@ -25,7 +25,6 @@ import (
 	"github.com/mochi-mqtt/server/v2/listeners"
 
 	"github.com/brutella/hap"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"tailscale.com/util/eventbus"
 )
 
@@ -348,7 +347,6 @@ func Main() {
 	kraWeb.Handle("/events", http.HandlerFunc(webServer.HandleSSE))
 	kraWeb.Handle("/health", http.HandlerFunc(webServer.HandleHealth))
 	kraWeb.Handle("/qrcode", http.HandlerFunc(webServer.HandleQRCode))
-	kraWeb.Handle("/metrics", promhttp.Handler())
 	kraWeb.Handle("/debug/eventbus", http.HandlerFunc(webServer.HandleEventBusDebug))
 
 	webURL := fmt.Sprintf("http://%s", cfg.WebAddrPort().String())
