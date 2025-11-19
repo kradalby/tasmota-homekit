@@ -9,18 +9,21 @@ import (
 	"time"
 
 	"github.com/kradalby/tasmota-go"
+	"github.com/kradalby/tasmota-nefit/events"
 	"tailscale.com/util/eventbus"
 )
 
 // Manager manages all Tasmota plug clients and their state.
 type Manager struct {
-	plugs           map[string]*Info
-	states          map[string]*State
-	mu              sync.RWMutex
-	commands        chan CommandEvent
-	statePublisher  *eventbus.Publisher[StateChangedEvent]
-	errorPublisher  *eventbus.Publisher[ErrorEvent]
-	stateSubscriber *eventbus.Subscriber[StateChangedEvent]
+	plugs            map[string]*Info
+	states           map[string]*State
+	mu               sync.RWMutex
+	commands         chan CommandEvent
+	statePublisher   *eventbus.Publisher[StateChangedEvent]
+	errorPublisher   *eventbus.Publisher[ErrorEvent]
+	stateSubscriber  *eventbus.Subscriber[StateChangedEvent]
+	eventBus         *events.Bus
+	stateEventClient *eventbus.Client
 }
 
 // Info holds the client and configuration for a plug.
@@ -50,17 +53,22 @@ func (c *tasmotaClient) ExecuteBacklog(ctx context.Context, cmds ...string) ([]b
 func NewManager(
 	plugConfigs []Plug,
 	commands chan CommandEvent,
-	bus *eventbus.Bus,
+	bus *events.Bus,
 ) (*Manager, error) {
-	client := bus.Client("plugmanager")
+	client, err := bus.Client(events.ClientPlugManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get plugmanager eventbus client: %w", err)
+	}
 
 	pm := &Manager{
-		plugs:           make(map[string]*Info),
-		states:          make(map[string]*State),
-		commands:        commands,
-		statePublisher:  eventbus.Publish[StateChangedEvent](client),
-		errorPublisher:  eventbus.Publish[ErrorEvent](client),
-		stateSubscriber: eventbus.Subscribe[StateChangedEvent](client),
+		plugs:            make(map[string]*Info),
+		states:           make(map[string]*State),
+		commands:         commands,
+		statePublisher:   eventbus.Publish[StateChangedEvent](client),
+		errorPublisher:   eventbus.Publish[ErrorEvent](client),
+		stateSubscriber:  eventbus.Subscribe[StateChangedEvent](client),
+		eventBus:         bus,
+		stateEventClient: client,
 	}
 
 	for _, plugConfig := range plugConfigs {
@@ -82,6 +90,8 @@ func NewManager(
 			MQTTConnected: false,
 			LastSeen:      time.Time{},
 		}
+
+		pm.publishStateUpdate("initial", plugConfig.ID, *pm.states[plugConfig.ID])
 
 		slog.Info("Initialized plug client",
 			"id", plugConfig.ID,
@@ -161,6 +171,7 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		PlugID: plugID,
 		State:  stateCopy,
 	})
+	pm.publishStateUpdate("command", plugID, stateCopy)
 
 	return nil
 }
@@ -204,6 +215,7 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	state.On = statusResp.Status.Power == "ON"
 	state.LastUpdated = time.Now()
 	copy := *state
+	pm.publishStateUpdate("status", plugID, copy)
 	return &copy, nil
 }
 
@@ -256,6 +268,7 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 				"mqtt_connected", stateCopy.MQTTConnected,
 				"last_seen", stateCopy.LastSeen,
 			)
+			pm.publishStateUpdate("eventbus", event.PlugID, stateCopy)
 
 		case <-ctx.Done():
 			return
@@ -395,4 +408,49 @@ func (pm *Manager) Plug(plugID string) (Plug, State, bool) {
 	}
 
 	return info.Config, *state, true
+}
+
+func (pm *Manager) publishStateUpdate(source, plugID string, state State) {
+	if pm.eventBus == nil || pm.stateEventClient == nil {
+		return
+	}
+
+	info, ok := pm.plugs[plugID]
+	name := plugID
+	if ok {
+		name = info.Config.Name
+	}
+
+	connectionState, connectionNote := connectionStatus(state.LastSeen)
+
+	pm.eventBus.PublishStateUpdate(pm.stateEventClient, events.StateUpdateEvent{
+		Timestamp:       time.Now(),
+		Source:          source,
+		PlugID:          plugID,
+		Name:            name,
+		On:              state.On,
+		Power:           state.Power,
+		Energy:          state.Energy,
+		MQTTConnected:   state.MQTTConnected,
+		LastSeen:        state.LastSeen,
+		LastUpdated:     state.LastUpdated,
+		ConnectionState: connectionState,
+		ConnectionNote:  connectionNote,
+	})
+}
+
+func connectionStatus(lastSeen time.Time) (string, string) {
+	if lastSeen.IsZero() {
+		return "disconnected", "Never seen"
+	}
+
+	since := time.Since(lastSeen)
+	switch {
+	case since < 30*time.Second:
+		return "connected", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	case since < 60*time.Second:
+		return "stale", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	default:
+		return "disconnected", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	}
 }

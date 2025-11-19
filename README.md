@@ -26,7 +26,8 @@ Control your Tasmota smart plugs through Apple HomeKit and a simple web interfac
 # Enter development shell
 nix develop
 
-# Quick commands (flake apps)
+# Quick commands (flake apps — no Makefile required)
+# Run everything inside `nix develop`; the flake apps replace the old Makefile targets.
 nix run .#test          # go test ./...
 nix run .#test-race     # go test -race
 nix run .#lint          # golangci-lint
@@ -72,13 +73,13 @@ Copy `.env.example` to `.env` and configure:
 
 ```bash
 TASMOTA_HOMEKIT_HAP_PIN=12345678
-TASMOTA_HOMEKIT_HAP_PORT=8080
+TASMOTA_HOMEKIT_HAP_ADDR=0.0.0.0:8080
 TASMOTA_HOMEKIT_PLUGS_CONFIG=./plugs.hujson
 ```
 
 For NixOS, convert that file into `/etc/tasmota-homekit/env` (or an agenix secret) and point `services.tasmota-homekit.environmentFile` at it so the module loads the same values that the CLI uses during development.
 
-See `.env.example` for the full list of options.
+See `.env.example` for the full list of options (`TASMOTA_HOMEKIT_{HAP,WEB,MQTT}_ADDR` all accept Go-style `addr:port` strings; if omitted, they fall back to the matching `*_BIND_ADDRESS` + `*_PORT` variables with defaults of `0.0.0.0` and `8080/8081/1883`).
 
 ### Web Interface & Endpoints
 
@@ -86,10 +87,11 @@ The embedded kra web server exposes a consistent set of endpoints (locally and o
 
 - `/` – elem-go dashboard with plug controls, event log, and HomeKit QR code.
 - `/toggle/<plug-id>` – HTMX form to toggle a specific plug.
-- `/events` – SSE stream used by the dashboard for realtime updates.
+- `/events` – JSON SSE stream mirroring `nefit-homekit` (`StateUpdateEvent` payloads with plug name, connection state, etc.).
 - `/health` – JSON health summary (plug count, SSE clients).
 - `/metrics` – Prometheus metrics (register your collector here).
 - `/qrcode` – Plain-text QR/PIN output for headless setups.
+- `/debug/eventbus` – Diagnostics page mirroring `nefit-homekit` (live state + SSE client count).
 
 Set `TASMOTA_HOMEKIT_TS_AUTHKEY` and `TASMOTA_HOMEKIT_TS_HOSTNAME` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed.
 
@@ -206,6 +208,9 @@ services.tasmota-homekit.environment        # Attrset of extra TASMOTA_HOMEKIT_*
 services.tasmota-homekit.ports.hap          # HAP port (default 8080)
 services.tasmota-homekit.ports.web          # Web UI port (default 8081)
 services.tasmota-homekit.ports.mqtt         # Embedded MQTT broker port (default 1883)
+services.tasmota-homekit.bindAddresses.hap  # IP for HAP listener (default 0.0.0.0)
+services.tasmota-homekit.bindAddresses.web  # IP for web listener (default 0.0.0.0)
+services.tasmota-homekit.bindAddresses.mqtt # IP for MQTT listener (default 0.0.0.0)
 services.tasmota-homekit.hap.pin            # HomeKit PIN (8 digits)
 services.tasmota-homekit.hap.storagePath    # Directory for pairing data and runtime state
 services.tasmota-homekit.plugsConfig        # HuJSON description of plugs
@@ -296,6 +301,7 @@ Features:
   - Green: Connected (seen in last 30s)
   - Orange: Stale (seen 30-60s ago)
   - Red: Disconnected (not seen in 60+ seconds)
+- **Lifecycle table**: `/debug/eventbus` renders MQTT/HAP/Web status rows so you can confirm which components are connected without tailing logs.
 - See recent events and state changes
 - **Real-time automatic updates** via Server-Sent Events (SSE)
 - HTMX-powered interface for smooth, reactive UX

@@ -2,11 +2,13 @@ package plugs
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 
+	"github.com/kradalby/tasmota-nefit/events"
 	"github.com/stretchr/testify/require"
-	"tailscale.com/util/eventbus"
 )
 
 type fakeClient struct {
@@ -43,10 +45,14 @@ var _ interface {
 func newTestManager(t *testing.T) (*Manager, *fakeClient, chan CommandEvent) {
 	t.Helper()
 
-	eb := eventbus.New()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	eventBus, err := events.New(logger)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = eventBus.Close() })
+
 	commands := make(chan CommandEvent, 1)
 
-	pm, err := NewManager([]Plug{{ID: "plug-1", Name: "Plug", Address: "1"}}, commands, eb)
+	pm, err := NewManager([]Plug{{ID: "plug-1", Name: "Plug", Address: "1"}}, commands, eventBus)
 	require.NoError(t, err)
 
 	fake := &fakeClient{}

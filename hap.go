@@ -3,8 +3,10 @@ package tasmotahomekit
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/brutella/hap/accessory"
+	"github.com/kradalby/tasmota-nefit/events"
 	"github.com/kradalby/tasmota-nefit/plugs"
 	"tailscale.com/util/eventbus"
 )
@@ -16,6 +18,8 @@ type HAPManager struct {
 	commands        chan plugs.CommandEvent
 	plugManager     *plugs.Manager
 	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
+	eventBus        *events.Bus
+	eventClient     *eventbus.Client
 }
 
 // NewHAPManager creates a new HAP manager with accessories for all plugs
@@ -23,9 +27,12 @@ func NewHAPManager(
 	plugConfigs []plugs.Plug,
 	commands chan plugs.CommandEvent,
 	plugManager *plugs.Manager,
-	bus *eventbus.Bus,
+	bus *events.Bus,
 ) *HAPManager {
-	client := bus.Client("hapmanager")
+	client, err := bus.Client(events.ClientHAP)
+	if err != nil {
+		panic(err)
+	}
 
 	// Create bridge accessory
 	bridge := accessory.NewBridge(accessory.Info{
@@ -41,6 +48,8 @@ func NewHAPManager(
 		commands:        commands,
 		plugManager:     plugManager,
 		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
+		eventBus:        bus,
+		eventClient:     client,
 	}
 
 	// Create outlet accessory for each plug
@@ -64,6 +73,8 @@ func NewHAPManager(
 				PlugID: plugID,
 				On:     on,
 			}
+
+			hm.publishCommand(plugID, on)
 		})
 
 		hm.outlets[plug.ID] = outlet
@@ -119,4 +130,19 @@ func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (hm *HAPManager) publishCommand(plugID string, on bool) {
+	if hm.eventBus == nil || hm.eventClient == nil {
+		return
+	}
+
+	desiredState := on
+	hm.eventBus.PublishCommand(hm.eventClient, events.CommandEvent{
+		Timestamp:   time.Now(),
+		Source:      "homekit",
+		PlugID:      plugID,
+		CommandType: events.CommandTypeSetPower,
+		On:          &desiredState,
+	})
 }

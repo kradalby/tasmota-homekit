@@ -25,7 +25,8 @@ nix flake check
 - Reusable helpers should live in `../kra` or be exported here so `nefit-homekit` can import them.
 - Keep README concise and factual; remove emojis/brag copy when editing.
 - Keep planning notes updated privately without referencing them within documentation.
-- Web routes must match `nefit-homekit`: `/`, `/toggle/<plug>`, `/events`, `/health`, `/metrics`, `/qrcode`. Use `kra/web.NewServer` with Tailscale hostname/auth-key.
+- Listener env vars mirror `nefit-homekit`: prefer `TASMOTA_HOMEKIT_{HAP,WEB,MQTT}_ADDR` Go-style bindings so tests/docs stay aligned with the module’s `bindAddresses.*` options.
+- Web routes must match `nefit-homekit`: `/`, `/toggle/<plug>`, `/events`, `/health`, `/metrics`, `/qrcode`, `/debug/eventbus`. `/events` now streams JSON `StateUpdateEvent` payloads; keep the SSE tests and elem-go UI in sync.
 - CI (`.github/workflows/ci.yml`) runs tests (Linux/macOS, coverage + race), golangci-lint, `nix build`, `nix flake check`, and a NixOS module eval. Match these locally before pushing.
 - Flake apps: `nix run .#test`, `nix run .#test-race`, `nix run .#lint`, `nix run .#coverage`; use these instead of ad-hoc scripts.
 

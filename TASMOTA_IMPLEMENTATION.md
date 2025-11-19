@@ -27,7 +27,7 @@ The runtime keeps parity with `nefit-homekit`: a single eventbus fans state out 
 ### Environment variables (`TASMOTA_HOMEKIT_*`)
 
 - Required: `TASMOTA_HOMEKIT_PLUGS_CONFIG` (HuJSON path) and HAP secrets (`TASMOTA_HOMEKIT_HAP_PIN`, optional `TASMOTA_HOMEKIT_HAP_STORAGE_PATH`).
-- Ports: `TASMOTA_HOMEKIT_HAP_PORT`, `TASMOTA_HOMEKIT_WEB_PORT`, `TASMOTA_HOMEKIT_MQTT_PORT`.
+- Listeners: prefer `TASMOTA_HOMEKIT_HAP_ADDR`, `TASMOTA_HOMEKIT_WEB_ADDR`, and `TASMOTA_HOMEKIT_MQTT_ADDR` (Go-style `addr:port`). When omitted, the runtime combines `TASMOTA_HOMEKIT_*_BIND_ADDRESS` (defaults `0.0.0.0`) with `TASMOTA_HOMEKIT_*_PORT` (defaults `8080/8081/1883`).
 - Logging: `TASMOTA_HOMEKIT_LOG_LEVEL`, `TASMOTA_HOMEKIT_LOG_FORMAT`.
 - Tailscale: `TASMOTA_HOMEKIT_TS_HOSTNAME`, `TASMOTA_HOMEKIT_TS_AUTHKEY` (usually injected through the module credential loader).
 

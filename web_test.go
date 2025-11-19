@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kradalby/tasmota-nefit/events"
 	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"tailscale.com/util/eventbus"
 )
 
@@ -68,10 +71,13 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.CommandEvent) {
+func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.CommandEvent, *events.Bus) {
 	t.Helper()
 
-	bus := eventbus.New()
+	bus, err := events.New(testLogger())
+	if err != nil {
+		t.Fatalf("events.New() error = %v", err)
+	}
 	provider := newFakePlugProvider()
 	cmds := make(chan plugs.CommandEvent, 1)
 
@@ -89,11 +95,11 @@ func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.C
 		ws.Close()
 	})
 
-	return ws, provider, cmds
+	return ws, provider, cmds, bus
 }
 
 func TestHandleIndex(t *testing.T) {
-	ws, _, _ := newTestWebServer(t)
+	ws, _, _, _ := newTestWebServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -121,7 +127,12 @@ func TestHandleIndex(t *testing.T) {
 }
 
 func TestHandleTogglePublishesCommand(t *testing.T) {
-	ws, _, cmds := newTestWebServer(t)
+	ws, _, cmds, bus := newTestWebServer(t)
+
+	client, err := bus.Client(events.ClientWeb)
+	require.NoError(t, err)
+	sub := eventbus.Subscribe[events.CommandEvent](client)
+	t.Cleanup(sub.Close)
 
 	req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -139,6 +150,16 @@ func TestHandleTogglePublishesCommand(t *testing.T) {
 		t.Fatal("expected command event")
 	}
 
+	select {
+	case evt := <-sub.Events():
+		require.Equal(t, "plug-1", evt.PlugID)
+		require.NotNil(t, evt.On)
+		require.True(t, *evt.On)
+		require.Equal(t, events.CommandTypeSetPower, evt.CommandType)
+	case <-time.After(time.Second):
+		t.Fatal("expected command publish")
+	}
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200", rec.Code)
 	}
@@ -151,12 +172,13 @@ type flushRecorder struct {
 func (f *flushRecorder) Flush() {}
 
 func TestHandleSSE(t *testing.T) {
-	ws, _, _ := newTestWebServer(t)
+	ws, _, _, bus := newTestWebServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/events", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req = req.WithContext(ctx)
+	ws.Start(ctx)
+
+	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
 	rec := &flushRecorder{httptest.NewRecorder()}
 
 	done := make(chan struct{})
@@ -165,9 +187,24 @@ func TestHandleSSE(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
-	ws.broadcastSSE("plug-1")
-	time.Sleep(50 * time.Millisecond)
+	client, err := bus.Client(events.ClientPlugManager)
+	if err != nil {
+		t.Fatalf("bus.Client() error = %v", err)
+	}
+	bus.PublishStateUpdate(client, events.StateUpdateEvent{
+		PlugID:      "plug-1",
+		Name:        "Test Plug",
+		On:          true,
+		LastUpdated: time.Now(),
+		LastSeen:    time.Now(),
+	})
+
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		if !strings.Contains(rec.Body.String(), "\"plug_id\":\"plug-1\"") {
+			assert.Fail(c, "missing SSE event")
+		}
+	}, time.Second, 20*time.Millisecond)
+
 	cancel()
 
 	select {
@@ -176,14 +213,61 @@ func TestHandleSSE(t *testing.T) {
 		t.Fatal("SSE handler did not exit")
 	}
 
+	var lastData string
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if strings.HasPrefix(line, "data:") {
+			lastData = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+	}
+	if lastData == "" {
+		t.Fatalf("expected SSE payload, got %q", rec.Body.String())
+	}
+
+	var evt events.StateUpdateEvent
+	if err := json.Unmarshal([]byte(lastData), &evt); err != nil {
+		t.Fatalf("failed to unmarshal SSE payload: %v", err)
+	}
+	if evt.PlugID != "plug-1" || !evt.On {
+		t.Fatalf("unexpected SSE event: %+v", evt)
+	}
+}
+
+func TestHandleEventBusDebugShowsStatuses(t *testing.T) {
+	ws, _, _, bus := newTestWebServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ws.Start(ctx)
+
+	client, err := bus.Client(events.ClientHAP)
+	if err != nil {
+		t.Fatalf("Client() error = %v", err)
+	}
+
+	bus.PublishConnectionStatus(client, events.ConnectionStatusEvent{
+		Timestamp: time.Now(),
+		Component: "hap",
+		Status:    events.ConnectionStatusConnected,
+	})
+
+	time.Sleep(20 * time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/eventbus", nil)
+	rec := httptest.NewRecorder()
+
+	ws.HandleEventBusDebug(rec, req)
+
 	body := rec.Body.String()
-	if !strings.Contains(body, "plug-1") {
-		t.Fatalf("expected SSE payload, got %q", body)
+	if !strings.Contains(body, "Component Status") {
+		t.Fatalf("expected component status table, got %q", body)
+	}
+	if !strings.Contains(body, "hap") {
+		t.Fatalf("expected component entry in debug output, got %q", body)
 	}
 }
 
 func TestHandleHealth(t *testing.T) {
-	ws, _, _ := newTestWebServer(t)
+	ws, _, _, _ := newTestWebServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -207,7 +291,7 @@ func TestHandleHealth(t *testing.T) {
 }
 
 func TestHandleQRCode(t *testing.T) {
-	ws, _, _ := newTestWebServer(t)
+	ws, _, _, _ := newTestWebServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/qrcode", nil)
 	rec := httptest.NewRecorder()
@@ -221,5 +305,50 @@ func TestHandleQRCode(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "00102003") {
 		t.Fatalf("expected PIN in response: %s", body)
+	}
+}
+
+func TestHandleEventBusDebug(t *testing.T) {
+	ws, _, _, bus := newTestWebServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ws.Start(ctx)
+
+	client, err := bus.Client(events.ClientPlugManager)
+	if err != nil {
+		t.Fatalf("bus.Client() error = %v", err)
+	}
+	bus.PublishStateUpdate(client, events.StateUpdateEvent{
+		PlugID:      "plug-1",
+		Name:        "Test Plug",
+		On:          true,
+		LastUpdated: time.Now(),
+		LastSeen:    time.Now(),
+	})
+
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		ws.stateMu.RLock()
+		defer ws.stateMu.RUnlock()
+		_, ok := ws.currentState["plug-1"]
+		assert.True(c, ok)
+	}, time.Second, 20*time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/eventbus", nil)
+	rec := httptest.NewRecorder()
+
+	ws.HandleEventBusDebug(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", rec.Code)
+	}
+
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("Content-Type = %s, want text/html", rec.Header().Get("Content-Type"))
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "plug-1") {
+		t.Fatalf("expected plug info in response: %s", body)
 	}
 }
