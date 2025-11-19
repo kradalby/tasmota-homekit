@@ -59,6 +59,26 @@ in
       };
     };
 
+    bindAddresses = {
+      hap = mkOption {
+        type = types.str;
+        default = "0.0.0.0";
+        description = "Address to bind the HAP listener to.";
+      };
+
+      web = mkOption {
+        type = types.str;
+        default = "0.0.0.0";
+        description = "Address to bind the web interface to.";
+      };
+
+      mqtt = mkOption {
+        type = types.str;
+        default = "0.0.0.0";
+        description = "Address to bind the embedded MQTT broker to.";
+      };
+    };
+
     hap = {
       pin = mkOption {
         type = types.str;
@@ -153,6 +173,9 @@ in
       systemd.services.tasmota-homekit =
         let
           envVars = {
+            TASMOTA_HOMEKIT_HAP_ADDR = "${cfg.bindAddresses.hap}:${toString cfg.ports.hap}";
+            TASMOTA_HOMEKIT_WEB_ADDR = "${cfg.bindAddresses.web}:${toString cfg.ports.web}";
+            TASMOTA_HOMEKIT_MQTT_ADDR = "${cfg.bindAddresses.mqtt}:${toString cfg.ports.mqtt}";
             TASMOTA_HOMEKIT_HAP_PORT = toString cfg.ports.hap;
             TASMOTA_HOMEKIT_WEB_PORT = toString cfg.ports.web;
             TASMOTA_HOMEKIT_MQTT_PORT = toString cfg.ports.mqtt;
@@ -181,6 +204,10 @@ in
           wantedBy = [ "multi-user.target" ];
           wants = [ "network-online.target" ];
           after = [ "network-online.target" ];
+
+          restartTriggers =
+            [ cfg.package cfg.plugsConfig ]
+            ++ optional (cfg.environmentFile != null) cfg.environmentFile;
 
           environment = envVars;
 

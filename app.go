@@ -2,6 +2,7 @@ package tasmotahomekit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -14,6 +15,9 @@ import (
 	homekitqr "github.com/kradalby/homekit-qr"
 	"github.com/kradalby/kra/web"
 	appconfig "github.com/kradalby/tasmota-nefit/config"
+	"github.com/kradalby/tasmota-nefit/events"
+	"github.com/kradalby/tasmota-nefit/logging"
+	"github.com/kradalby/tasmota-nefit/metrics"
 	"github.com/kradalby/tasmota-nefit/plugs"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -31,23 +35,29 @@ var version = "dev"
 func Main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
-
-	slog.Info("Starting Tasmota HomeKit Bridge", "version", version)
-
 	cfg, err := appconfig.Load()
 	if err != nil {
-		slog.Error("Failed to load configuration", "error", err)
+		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
 
+	logger, err := logging.New(cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to configure logger: %v\n", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(logger)
+
+	slog.Info("Starting Tasmota HomeKit Bridge",
+		"version", version,
+		"log_level", cfg.LogLevel,
+		"log_format", cfg.LogFormat,
+	)
+
 	slog.Info("Configuration loaded",
-		"hap_port", cfg.HAP.Port,
-		"web_port", cfg.Web.Port,
-		"mqtt_port", cfg.MQTT.Port,
+		"hap_addr", cfg.HAPAddrPort().String(),
+		"web_addr", cfg.WebAddrPort().String(),
+		"mqtt_addr", cfg.MQTTAddrPort().String(),
 		"plugs_config", cfg.PlugsConfigPath,
 	)
 
@@ -69,9 +79,30 @@ func Main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	bus := eventbus.New()
+	eventBus, err := events.New(logger)
+	if err != nil {
+		slog.Error("Failed to initialize eventbus", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := eventBus.Close(); err != nil {
+			slog.Warn("Error closing eventbus", "error", err)
+		}
+	}()
+
 	commands := make(chan plugs.CommandEvent, 10)
-	errorPublisher := eventbus.Publish[plugs.ErrorEvent](bus.Client("main"))
+	appClient, err := eventBus.Client(events.ClientMetrics)
+	if err != nil {
+		slog.Error("Failed to get metrics client", "error", err)
+		os.Exit(1)
+	}
+	errorPublisher := eventbus.Publish[plugs.ErrorEvent](appClient)
+	metricsCollector, err := metrics.NewCollector(ctx, logger, eventBus, nil)
+	if err != nil {
+		slog.Error("Failed to initialize metrics collector", "error", err)
+		os.Exit(1)
+	}
+	defer metricsCollector.Close()
 
 	localIP, err := getLocalIP()
 	if err != nil {
@@ -89,13 +120,17 @@ func Main() {
 		os.Exit(1)
 	}
 
-	plugManager, err := plugs.NewManager(plugCfg.Plugs, commands, bus)
+	plugManager, err := plugs.NewManager(plugCfg.Plugs, commands, eventBus)
 	if err != nil {
 		slog.Error("Failed to initialize plug manager", "error", err)
 		os.Exit(1)
 	}
 
-	mqttClient := bus.Client("mqtthook")
+	mqttClient, err := eventBus.Client(events.ClientMQTT)
+	if err != nil {
+		slog.Error("Failed to get MQTT client", "error", err)
+		os.Exit(1)
+	}
 	mqttHook := &MQTTHook{
 		statePublisher: eventbus.Publish[plugs.StateChangedEvent](mqttClient),
 	}
@@ -106,21 +141,45 @@ func Main() {
 
 	tcp := listeners.NewTCP(listeners.Config{
 		ID:      "tcp",
-		Address: fmt.Sprintf(":%d", cfg.MQTT.Port),
+		Address: cfg.MQTTAddrPort().String(),
 	})
 	if err := mqttServer.AddListener(tcp); err != nil {
 		slog.Error("Failed to add MQTT listener", "error", err)
 		os.Exit(1)
 	}
 
+	mqttComponent := string(events.ClientMQTT)
+	eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+		Timestamp: time.Now(),
+		Component: mqttComponent,
+		Status:    events.ConnectionStatusConnecting,
+	})
+
 	go func() {
-		slog.Info("Starting MQTT broker", "port", cfg.MQTT.Port)
+		slog.Info("Starting MQTT broker", "addr", cfg.MQTTAddrPort().String())
+		eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+			Timestamp: time.Now(),
+			Component: mqttComponent,
+			Status:    events.ConnectionStatusConnected,
+		})
 		if err := mqttServer.Serve(); err != nil {
+			eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+				Timestamp: time.Now(),
+				Component: mqttComponent,
+				Status:    events.ConnectionStatusFailed,
+				Error:     err.Error(),
+			})
 			slog.Error("MQTT server error", "error", err)
+			return
 		}
+		eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+			Timestamp: time.Now(),
+			Component: mqttComponent,
+			Status:    events.ConnectionStatusDisconnected,
+		})
 	}()
 
-	slog.Info("MQTT broker started", "port", cfg.MQTT.Port)
+	slog.Info("MQTT broker started", "addr", cfg.MQTTAddrPort().String())
 
 	go plugManager.ProcessCommands(ctx)
 	go plugManager.ProcessStateEvents(ctx)
@@ -146,7 +205,7 @@ func Main() {
 		go func(plugID string) {
 			time.Sleep(time.Second)
 
-			if err := plugManager.ConfigureMQTT(ctx, plugID, localIP, cfg.MQTT.Port); err != nil {
+			if err := plugManager.ConfigureMQTT(ctx, plugID, localIP, int(cfg.MQTTAddrPort().Port())); err != nil {
 				slog.Error("Failed to configure MQTT for plug",
 					"plug_id", plugID,
 					"error", err,
@@ -162,10 +221,10 @@ func Main() {
 		}(plug.ID)
 	}
 
-	go plugManager.MonitorConnections(ctx, localIP, cfg.MQTT.Port)
+	go plugManager.MonitorConnections(ctx, localIP, int(cfg.MQTTAddrPort().Port()))
 	slog.Info("Connection monitoring started")
 
-	hapManager := NewHAPManager(plugCfg.Plugs, commands, plugManager, bus)
+	hapManager := NewHAPManager(plugCfg.Plugs, commands, plugManager, eventBus)
 	hapManager.Start(ctx)
 	defer hapManager.Close()
 
@@ -176,7 +235,7 @@ func Main() {
 	}
 
 	hapServer, err := hap.NewServer(
-		hap.NewFsStore(cfg.HAP.StoragePath),
+		hap.NewFsStore(cfg.HAPStoragePath),
 		accessories[0],
 		accessories[1:]...,
 	)
@@ -185,24 +244,61 @@ func Main() {
 		os.Exit(1)
 	}
 
-	hapServer.Pin = cfg.HAP.PIN
-	hapServer.Addr = fmt.Sprintf(":%d", cfg.HAP.Port)
+	hapServer.Pin = cfg.HAPPin
+	hapServer.Addr = cfg.HAPAddrPort().String()
+
+	hapStatusClient, err := eventBus.Client(events.ClientHAP)
+	if err != nil {
+		slog.Error("Failed to get HAP client", "error", err)
+		os.Exit(1)
+	}
+	hapComponent := string(events.ClientHAP)
+	eventBus.PublishConnectionStatus(hapStatusClient, events.ConnectionStatusEvent{
+		Timestamp: time.Now(),
+		Component: hapComponent,
+		Status:    events.ConnectionStatusConnecting,
+	})
 
 	go func() {
 		slog.Info("Starting HomeKit server",
-			"port", cfg.HAP.Port,
-			"pin", cfg.HAP.PIN,
+			"addr", cfg.HAPAddrPort().String(),
+			"pin", cfg.HAPPin,
 		)
+		eventBus.PublishConnectionStatus(hapStatusClient, events.ConnectionStatusEvent{
+			Timestamp: time.Now(),
+			Component: hapComponent,
+			Status:    events.ConnectionStatusConnected,
+		})
 		if err := hapServer.ListenAndServe(ctx); err != nil {
-			slog.Error("HAP server error", "error", err)
+			if errors.Is(err, context.Canceled) {
+				eventBus.PublishConnectionStatus(hapStatusClient, events.ConnectionStatusEvent{
+					Timestamp: time.Now(),
+					Component: hapComponent,
+					Status:    events.ConnectionStatusDisconnected,
+				})
+			} else {
+				eventBus.PublishConnectionStatus(hapStatusClient, events.ConnectionStatusEvent{
+					Timestamp: time.Now(),
+					Component: hapComponent,
+					Status:    events.ConnectionStatusFailed,
+					Error:     err.Error(),
+				})
+				slog.Error("HAP server error", "error", err)
+			}
+			return
 		}
+		eventBus.PublishConnectionStatus(hapStatusClient, events.ConnectionStatusEvent{
+			Timestamp: time.Now(),
+			Component: hapComponent,
+			Status:    events.ConnectionStatusDisconnected,
+		})
 	}()
 
-	fmt.Printf("HomeKit bridge ready - pair with PIN: %s\n\n", cfg.HAP.PIN)
+	fmt.Printf("HomeKit bridge ready - pair with PIN: %s\n\n", cfg.HAPPin)
 
 	qrConfig := homekitqr.QRCodeConfig{
 		SetupURIConfig: homekitqr.SetupURIConfig{
-			PairingCode: cfg.HAP.PIN,
+			PairingCode: cfg.HAPPin,
 			SetupID:     "4412",
 			Category:    homekitqr.CategoryBridge,
 		},
@@ -216,7 +312,7 @@ func Main() {
 	}
 
 	fmt.Println("========================================")
-	slog.Info("Scan QR code or enter PIN manually in Home app", "pin", cfg.HAP.PIN)
+	slog.Info("Scan QR code or enter PIN manually in Home app", "pin", cfg.HAPPin)
 
 	qrCode := ""
 	if qr != "" {
@@ -228,11 +324,11 @@ func Main() {
 		web.WithLogger(logger),
 	}
 
-	enableTailscale := cfg.Tailscale.AuthKey != ""
+	enableTailscale := cfg.TailscaleAuthKey != ""
 	kraConfig := web.ServerConfig{
-		Hostname:        cfg.Tailscale.Hostname,
-		LocalAddr:       fmt.Sprintf(":%d", cfg.Web.Port),
-		AuthKey:         cfg.Tailscale.AuthKey,
+		Hostname:        cfg.TailscaleHostname,
+		LocalAddr:       cfg.WebAddrPort().String(),
+		AuthKey:         cfg.TailscaleAuthKey,
 		EnableTailscale: enableTailscale,
 	}
 
@@ -242,7 +338,7 @@ func Main() {
 		os.Exit(1)
 	}
 
-	webServer := NewWebServer(logger, plugManager, commands, bus, kraWeb, cfg.HAP.PIN, qrCode)
+	webServer := NewWebServer(logger, plugManager, commands, eventBus, kraWeb, cfg.HAPPin, qrCode)
 	webServer.LogEvent("Server starting...")
 	webServer.Start(ctx)
 	defer webServer.Close()
@@ -253,10 +349,11 @@ func Main() {
 	kraWeb.Handle("/health", http.HandlerFunc(webServer.HandleHealth))
 	kraWeb.Handle("/qrcode", http.HandlerFunc(webServer.HandleQRCode))
 	kraWeb.Handle("/metrics", promhttp.Handler())
+	kraWeb.Handle("/debug/eventbus", http.HandlerFunc(webServer.HandleEventBusDebug))
 
-	webURL := fmt.Sprintf("http://localhost:%d", cfg.Web.Port)
+	webURL := fmt.Sprintf("http://%s", cfg.WebAddrPort().String())
 	if enableTailscale {
-		webURL = fmt.Sprintf("https://%s (and %s)", cfg.Tailscale.Hostname, fmt.Sprintf("http://localhost:%d", cfg.Web.Port))
+		webURL = fmt.Sprintf("https://%s (and http://%s)", cfg.TailscaleHostname, cfg.WebAddrPort().String())
 	}
 	slog.Info("Web UI available", "url", webURL)
 
@@ -269,5 +366,10 @@ func Main() {
 	if err := mqttServer.Close(); err != nil {
 		slog.Error("Error stopping MQTT broker", "error", err)
 	}
+	eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+		Timestamp: time.Now(),
+		Component: mqttComponent,
+		Status:    events.ConnectionStatusDisconnected,
+	})
 	slog.Info("Shutdown complete")
 }
