@@ -230,31 +230,6 @@ in
             StandardOutput = "journal";
             StandardError = "journal";
             SyslogIdentifier = "tasmota-homekit";
-
-            NoNewPrivileges = true;
-            PrivateTmp = true;
-            ProtectSystem = "strict";
-            ProtectHome = true;
-            ReadWritePaths = [ cfg.hap.storagePath ];
-            ProtectKernelTunables = true;
-            ProtectKernelModules = true;
-            ProtectKernelLogs = true;
-            ProtectControlGroups = true;
-            PrivateDevices = true;
-            ProtectHostname = true;
-            ProtectClock = true;
-            RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" "AF_NETLINK" ];
-            RestrictNamespaces = true;
-            RestrictRealtime = true;
-            RestrictSUIDSGID = true;
-            LockPersonality = true;
-            RemoveIPC = true;
-            SystemCallArchitectures = "native";
-            SystemCallFilter = [
-              "@system-service"
-              "~@privileged"
-              "~@resources"
-            ];
           }
           // (optionalAttrs (cfg.environmentFile != null) {
             EnvironmentFile = cfg.environmentFile;
