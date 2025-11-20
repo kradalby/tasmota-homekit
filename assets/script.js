@@ -11,6 +11,7 @@
   }
 
   function updatePlugCard(data) {
+    console.log('SSE Data:', data);
     const card = document.querySelector('[data-plug-id="' + data.plug_id + '"]');
     if (!card) {
       return;

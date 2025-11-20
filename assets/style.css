@@ -122,15 +122,14 @@ p {
     background: #f8fafc;
     border-radius: 8px;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
+    grid-template-columns: auto 1fr auto 1fr;
+    gap: 8px 24px;
     border: 1px solid #e2e8f0;
+    align-items: center;
 }
 
 .stat-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    display: contents;
 }
 
 .stat-label {
@@ -144,6 +143,7 @@ p {
     color: #0f172a;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    text-align: right;
 }
 
 form {
