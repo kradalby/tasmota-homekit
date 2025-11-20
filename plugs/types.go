@@ -51,6 +51,16 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("duplicate plug id %q", plug.ID)
 		}
 		seenIDs[plug.ID] = struct{}{}
+
+		// Set defaults for HomeKit and Web if not specified
+		if cfg.Plugs[i].HomeKit == nil {
+			defaultTrue := true
+			cfg.Plugs[i].HomeKit = &defaultTrue
+		}
+		if cfg.Plugs[i].Web == nil {
+			defaultTrue := true
+			cfg.Plugs[i].Web = &defaultTrue
+		}
 	}
 
 	return &cfg, nil
@@ -63,6 +73,8 @@ type Plug struct {
 	Address  string       `json:"address"`
 	Model    string       `json:"model"`
 	Features PlugFeatures `json:"features"`
+	HomeKit  *bool        `json:"homekit,omitempty"`
+	Web      *bool        `json:"web,omitempty"`
 }
 
 // PlugFeatures indicates optional features of a plug.
@@ -77,6 +89,8 @@ type State struct {
 	Name          string
 	On            bool
 	Power         float64 // Watts
+	Voltage       float64 // Volts
+	Current       float64 // Amperes
 	Energy        float64 // kWh
 	LastUpdated   time.Time
 	MQTTConnected bool

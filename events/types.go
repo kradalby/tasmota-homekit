@@ -12,6 +12,8 @@ type StateUpdateEvent struct {
 	Name            string    `json:"name"`
 	On              bool      `json:"on"`
 	Power           float64   `json:"power"`
+	Voltage         float64   `json:"voltage"`
+	Current         float64   `json:"current"`
 	Energy          float64   `json:"energy"`
 	MQTTConnected   bool      `json:"mqtt_connected"`
 	LastSeen        time.Time `json:"last_seen"`
@@ -43,6 +45,8 @@ func (e StateUpdateEvent) Equals(other StateUpdateEvent) bool {
 		e.Name == other.Name &&
 		e.On == other.On &&
 		almostEqual(e.Power, other.Power) &&
+		almostEqual(e.Voltage, other.Voltage) &&
+		almostEqual(e.Current, other.Current) &&
 		almostEqual(e.Energy, other.Energy) &&
 		e.MQTTConnected == other.MQTTConnected &&
 		e.LastSeen.Equal(other.LastSeen) &&

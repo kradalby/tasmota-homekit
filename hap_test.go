@@ -38,7 +38,7 @@ func TestHAPManagerUpdateState(t *testing.T) {
 		t.Fatalf("expected 1 outlet, got %d", len(hm.outlets))
 	}
 
-	hm.UpdateState("plug-1", true)
+	hm.UpdateState("plug-1", plugs.State{On: true})
 
 	if !hm.outlets["plug-1"].Outlet.On.Value() {
 		t.Fatalf("expected outlet to be ON")

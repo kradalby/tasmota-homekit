@@ -15,6 +15,7 @@ import (
 type HAPManager struct {
 	bridge          *accessory.Bridge
 	outlets         map[string]*accessory.Outlet
+	powerServices   map[string]*EveEnergyService
 	commands        chan plugs.CommandEvent
 	plugManager     *plugs.Manager
 	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
@@ -45,6 +46,7 @@ func NewHAPManager(
 	hm := &HAPManager{
 		bridge:          bridge,
 		outlets:         make(map[string]*accessory.Outlet),
+		powerServices:   make(map[string]*EveEnergyService),
 		commands:        commands,
 		plugManager:     plugManager,
 		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
@@ -54,12 +56,26 @@ func NewHAPManager(
 
 	// Create outlet accessory for each plug
 	for _, plug := range plugConfigs {
+		// Skip plugs that are not enabled for HomeKit
+		if plug.HomeKit != nil && !*plug.HomeKit {
+			slog.Info("Skipping plug for HomeKit", "plug_id", plug.ID, "name", plug.Name)
+			continue
+		}
+
 		outlet := accessory.NewOutlet(accessory.Info{
 			Name:         plug.Name,
 			Manufacturer: "Tasmota",
 			Model:        plug.Model,
 			SerialNumber: plug.ID,
 		})
+
+		// Add Eve Energy service if power monitoring is enabled
+		if plug.Features.PowerMonitoring {
+			eveService := NewEveEnergyService()
+			outlet.AddS(eveService.S)
+			hm.powerServices[plug.ID] = eveService
+			slog.Info("Added Eve Energy service", "plug_id", plug.ID)
+		}
 
 		// Capture plug ID for closure
 		plugID := plug.ID
@@ -97,7 +113,7 @@ func (hm *HAPManager) GetAccessories() []*accessory.A {
 }
 
 // UpdateState updates the HomeKit state for a plug
-func (hm *HAPManager) UpdateState(plugID string, on bool) {
+func (hm *HAPManager) UpdateState(plugID string, state plugs.State) {
 	outlet, exists := hm.outlets[plugID]
 	if !exists {
 		slog.Warn("Outlet not found for plug", "plug_id", plugID)
@@ -105,9 +121,22 @@ func (hm *HAPManager) UpdateState(plugID string, on bool) {
 	}
 
 	// Update HomeKit state
-	outlet.Outlet.On.SetValue(on)
+	outlet.Outlet.On.SetValue(state.On)
 
-	slog.Debug("Updated HomeKit state", "plug_id", plugID, "on", on)
+	// Update Eve Energy characteristics if available
+	if powerService, ok := hm.powerServices[plugID]; ok {
+		powerService.CurrentConsumption.SetValue(state.Power)
+		powerService.TotalConsumption.SetValue(state.Energy)
+		powerService.Voltage.SetValue(state.Voltage)
+		powerService.Current.SetValue(state.Current)
+	}
+
+	slog.Debug("Updated HomeKit state",
+		"plug_id", plugID,
+		"on", state.On,
+		"power", state.Power,
+		"energy", state.Energy,
+	)
 }
 
 // ProcessStateChanges listens for state changes and updates HomeKit
@@ -125,7 +154,7 @@ func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 	for {
 		select {
 		case event := <-hm.stateSubscriber.Events():
-			hm.UpdateState(event.PlugID, event.State.On)
+			hm.UpdateState(event.PlugID, event.State)
 		case <-ctx.Done():
 			return
 		}
