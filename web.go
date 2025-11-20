@@ -252,14 +252,14 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.State) elem.Node {
 	statusClass := "off"
 	statusText := "OFF"
-	buttonClass := "off"
+	buttonClass := "on" // Green for Turn On
 	buttonText := "Turn On"
 	buttonAction := "on"
 
 	if state.On {
 		statusClass = "on"
 		statusText = "ON"
-		buttonClass = "on"
+		buttonClass = "off" // Red for Turn Off
 		buttonText = "Turn Off"
 		buttonAction = "off"
 	}
@@ -314,26 +314,35 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 		)
 	}
 
+	// Icon selection
+	icon := "🔌" // Default plug icon
+	if info.Type == "bulb" {
+		icon = "💡"
+	}
+
 	return elem.Div(
 		attrs.Props{
 			attrs.ID:       "plug-" + plugID,
 			attrs.Class:    "plug " + statusClass,
 			"data-plug-id": plugID,
 		},
-		elem.Div(attrs.Props{attrs.Class: "plug-info"},
-			elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
-			elem.Div(attrs.Props{attrs.Class: "plug-status", "data-role": "status-text"},
-				elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
-					statusText,
-					state.LastUpdated.Format("15:04:05"),
-				)),
+		elem.Div(attrs.Props{attrs.Class: "plug-header"},
+			elem.Div(attrs.Props{attrs.Class: "plug-icon"}, elem.Text(icon)),
+			elem.Div(attrs.Props{attrs.Class: "plug-info"},
+				elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
+				elem.Div(attrs.Props{attrs.Class: "plug-status", "data-role": "status-text"},
+					elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
+						statusText,
+						state.LastUpdated.Format("15:04:05"),
+					)),
+				),
+				elem.Div(attrs.Props{attrs.Class: "connection-status"},
+					elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
+					elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
+				),
 			),
-			elem.Div(attrs.Props{attrs.Class: "connection-status"},
-				elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
-				elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
-			),
-			statsSection,
 		),
+		statsSection,
 		elem.Form(
 			attrs.Props{
 				"hx-post":   "/toggle/" + plugID,

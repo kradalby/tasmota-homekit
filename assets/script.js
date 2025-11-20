@@ -62,13 +62,13 @@
       if (data.on) {
         actionInput.value = 'off';
         button.textContent = 'Turn Off';
-        button.classList.remove('off');
-        button.classList.add('on');
+        button.classList.remove('on');
+        button.classList.add('off'); // Red for Turn Off
       } else {
         actionInput.value = 'on';
         button.textContent = 'Turn On';
-        button.classList.remove('on');
-        button.classList.add('off');
+        button.classList.remove('off');
+        button.classList.add('on'); // Green for Turn On
       }
     }
   }

@@ -100,8 +100,9 @@ type State struct {
 
 // StateChangedEvent is emitted when a plug's state changes.
 type StateChangedEvent struct {
-	PlugID string
-	State  State
+	PlugID        string
+	State         State
+	UpdatedFields []string
 }
 
 // CommandEvent requests a plug command.

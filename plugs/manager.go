@@ -249,18 +249,43 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 				continue
 			}
 
-			if !event.State.LastSeen.IsZero() {
-				state.LastSeen = event.State.LastSeen
-				state.MQTTConnected = event.State.MQTTConnected
-			}
+			if len(event.UpdatedFields) > 0 {
+				// Selective update based on what changed
+				for _, field := range event.UpdatedFields {
+					switch field {
+					case "On":
+						state.On = event.State.On
+					case "Power":
+						state.Power = event.State.Power
+					case "Voltage":
+						state.Voltage = event.State.Voltage
+					case "Current":
+						state.Current = event.State.Current
+					case "Energy":
+						state.Energy = event.State.Energy
+					case "MQTTConnected":
+						state.MQTTConnected = event.State.MQTTConnected
+					case "LastSeen":
+						state.LastSeen = event.State.LastSeen
+					case "LastUpdated":
+						state.LastUpdated = event.State.LastUpdated
+					}
+				}
+			} else {
+				// Fallback for legacy events or internal updates
+				if !event.State.LastSeen.IsZero() {
+					state.LastSeen = event.State.LastSeen
+					state.MQTTConnected = event.State.MQTTConnected
+				}
 
-			if !event.State.LastUpdated.IsZero() {
-				state.LastUpdated = event.State.LastUpdated
-				state.On = event.State.On
-				state.Power = event.State.Power
-				state.Voltage = event.State.Voltage
-				state.Current = event.State.Current
-				state.Energy = event.State.Energy
+				if !event.State.LastUpdated.IsZero() {
+					state.LastUpdated = event.State.LastUpdated
+					state.On = event.State.On
+					state.Power = event.State.Power
+					state.Voltage = event.State.Voltage
+					state.Current = event.State.Current
+					state.Energy = event.State.Energy
+				}
 			}
 
 			stateCopy := *state
