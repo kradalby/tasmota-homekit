@@ -140,7 +140,16 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	// Parse electrical stats from ENERGY field (from SENSOR telemetry)
-	if energy, ok := msg["ENERGY"].(map[string]interface{}); ok {
+	var energy map[string]interface{}
+	if e, ok := msg["ENERGY"].(map[string]interface{}); ok {
+		energy = e
+	} else if sns, ok := msg["StatusSNS"].(map[string]interface{}); ok {
+		if e, ok := sns["ENERGY"].(map[string]interface{}); ok {
+			energy = e
+		}
+	}
+
+	if energy != nil {
 		if power, ok := energy["Power"].(float64); ok {
 			partialState.Power = power
 		}
@@ -177,6 +186,10 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 	if _, ok := msg["ENERGY"]; ok {
 		updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
+	} else if sns, ok := msg["StatusSNS"].(map[string]interface{}); ok {
+		if _, ok := sns["ENERGY"]; ok {
+			updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
+		}
 	}
 	// Always update connectivity fields
 	updatedFields = append(updatedFields, "MQTTConnected", "LastSeen", "LastUpdated")
