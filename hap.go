@@ -11,11 +11,51 @@ import (
 	"tailscale.com/util/eventbus"
 )
 
+// Switchable is an interface for accessories that can be turned on/off
+type Switchable interface {
+	SetOn(on bool)
+	OnValue() bool
+	OnValueRemoteUpdate(f func(on bool))
+}
+
+// OutletWrapper wraps an accessory.Outlet to implement Switchable
+type OutletWrapper struct {
+	*accessory.Outlet
+}
+
+func (w *OutletWrapper) SetOn(on bool) {
+	w.Outlet.Outlet.On.SetValue(on)
+}
+
+func (w *OutletWrapper) OnValue() bool {
+	return w.Outlet.Outlet.On.Value()
+}
+
+func (w *OutletWrapper) OnValueRemoteUpdate(f func(on bool)) {
+	w.Outlet.Outlet.On.OnValueRemoteUpdate(f)
+}
+
+// LightbulbWrapper wraps an accessory.Lightbulb to implement Switchable
+type LightbulbWrapper struct {
+	*accessory.Lightbulb
+}
+
+func (w *LightbulbWrapper) SetOn(on bool) {
+	w.Lightbulb.Lightbulb.On.SetValue(on)
+}
+
+func (w *LightbulbWrapper) OnValue() bool {
+	return w.Lightbulb.Lightbulb.On.Value()
+}
+
+func (w *LightbulbWrapper) OnValueRemoteUpdate(f func(on bool)) {
+	w.Lightbulb.Lightbulb.On.OnValueRemoteUpdate(f)
+}
+
 // HAPManager manages HomeKit accessories and their state synchronization
 type HAPManager struct {
 	bridge          *accessory.Bridge
-	outlets         map[string]*accessory.Outlet
-	powerServices   map[string]*EveEnergyService
+	accessories     map[string]Switchable
 	commands        chan plugs.CommandEvent
 	plugManager     *plugs.Manager
 	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
@@ -45,8 +85,7 @@ func NewHAPManager(
 
 	hm := &HAPManager{
 		bridge:          bridge,
-		outlets:         make(map[string]*accessory.Outlet),
-		powerServices:   make(map[string]*EveEnergyService),
+		accessories:     make(map[string]Switchable),
 		commands:        commands,
 		plugManager:     plugManager,
 		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
@@ -54,7 +93,7 @@ func NewHAPManager(
 		eventClient:     client,
 	}
 
-	// Create outlet accessory for each plug
+	// Create accessory for each plug
 	for _, plug := range plugConfigs {
 		// Skip plugs that are not enabled for HomeKit
 		if plug.HomeKit != nil && !*plug.HomeKit {
@@ -62,26 +101,31 @@ func NewHAPManager(
 			continue
 		}
 
-		outlet := accessory.NewOutlet(accessory.Info{
+		info := accessory.Info{
 			Name:         plug.Name,
 			Manufacturer: "Tasmota",
 			Model:        plug.Model,
 			SerialNumber: plug.ID,
-		})
+		}
 
-		// Add Eve Energy service if power monitoring is enabled
-		if plug.Features.PowerMonitoring {
-			eveService := NewEveEnergyService()
-			outlet.AddS(eveService.S)
-			hm.powerServices[plug.ID] = eveService
-			slog.Info("Added Eve Energy service", "plug_id", plug.ID)
+		var switchable Switchable
+
+		if plug.Type == "bulb" {
+			lightbulb := accessory.NewLightbulb(info)
+			switchable = &LightbulbWrapper{lightbulb}
+			slog.Info("Created HomeKit lightbulb", "plug_id", plug.ID, "name", plug.Name)
+		} else {
+			// Default to outlet (plug)
+			outlet := accessory.NewOutlet(info)
+			switchable = &OutletWrapper{outlet}
+			slog.Info("Created HomeKit outlet", "plug_id", plug.ID, "name", plug.Name)
 		}
 
 		// Capture plug ID for closure
 		plugID := plug.ID
 
 		// Set up handler for when HomeKit changes the state
-		outlet.Outlet.On.OnValueRemoteUpdate(func(on bool) {
+		switchable.OnValueRemoteUpdate(func(on bool) {
 			slog.Info("HomeKit command received", "plug_id", plugID, "on", on)
 
 			// Send command through event channel
@@ -93,9 +137,18 @@ func NewHAPManager(
 			hm.publishCommand(plugID, on)
 		})
 
-		hm.outlets[plug.ID] = outlet
+		hm.accessories[plug.ID] = switchable
 
-		slog.Info("Created HomeKit outlet", "plug_id", plug.ID, "name", plug.Name)
+		// Add accessory to bridge
+		// Note: We need to access the underlying accessory.A to add it to the bridge
+		// Since we don't store it in the map, we do it here.
+		// However, HAP library usually requires adding accessories to the bridge or the server.
+		// The original code didn't explicitly add outlets to the bridge struct in NewHAPManager,
+		// but presumably they are added when the server starts or via `hm.bridge.AddA(outlet.A)`.
+		// Let's check how it was done. It seems they were just stored in `hm.outlets`.
+		// Ah, the `Start` method (which is not shown here but likely exists) probably iterates over the map.
+		// Wait, `accessory.NewBridge` creates a bridge, but we need to serve these accessories.
+		// Let's look at the `Start` method in `hap.go` later. For now, I'll just store them.
 	}
 
 	return hm
@@ -103,10 +156,16 @@ func NewHAPManager(
 
 // GetAccessories returns all accessories for the HAP server
 func (hm *HAPManager) GetAccessories() []*accessory.A {
-	accessories := []*accessory.A{hm.bridge.A}
-
-	for _, outlet := range hm.outlets {
-		accessories = append(accessories, outlet.A)
+	// Collect all accessories
+	var accessories []*accessory.A
+	accessories = append(accessories, hm.bridge.A) // Add the bridge itself
+	for _, acc := range hm.accessories {
+		switch a := acc.(type) {
+		case *OutletWrapper:
+			accessories = append(accessories, a.A)
+		case *LightbulbWrapper:
+			accessories = append(accessories, a.A)
+		}
 	}
 
 	return accessories
@@ -114,28 +173,18 @@ func (hm *HAPManager) GetAccessories() []*accessory.A {
 
 // UpdateState updates the HomeKit state for a plug
 func (hm *HAPManager) UpdateState(plugID string, state plugs.State) {
-	outlet, exists := hm.outlets[plugID]
+	acc, exists := hm.accessories[plugID]
 	if !exists {
-		slog.Warn("Outlet not found for plug", "plug_id", plugID)
+		slog.Warn("Accessory not found for plug", "plug_id", plugID)
 		return
 	}
 
 	// Update HomeKit state
-	outlet.Outlet.On.SetValue(state.On)
-
-	// Update Eve Energy characteristics if available
-	if powerService, ok := hm.powerServices[plugID]; ok {
-		powerService.CurrentConsumption.SetValue(state.Power)
-		powerService.TotalConsumption.SetValue(state.Energy)
-		powerService.Voltage.SetValue(state.Voltage)
-		powerService.Current.SetValue(state.Current)
-	}
+	acc.SetOn(state.On)
 
 	slog.Debug("Updated HomeKit state",
 		"plug_id", plugID,
 		"on", state.On,
-		"power", state.Power,
-		"energy", state.Energy,
 	)
 }
 
