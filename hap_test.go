@@ -34,13 +34,13 @@ func TestHAPManagerUpdateState(t *testing.T) {
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
 	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
-	if len(hm.outlets) != 1 {
-		t.Fatalf("expected 1 outlet, got %d", len(hm.outlets))
+	if len(hm.accessories) != 1 {
+		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
 	}
 
 	hm.UpdateState("plug-1", plugs.State{On: true})
 
-	if !hm.outlets["plug-1"].Outlet.On.Value() {
+	if !hm.accessories["plug-1"].OnValue() {
 		t.Fatalf("expected outlet to be ON")
 	}
 }
@@ -70,7 +70,7 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 	})
 
 	assert.EventuallyWithT(t, func(c *assert.CollectT) {
-		assert.True(c, hm.outlets["plug-1"].Outlet.On.Value())
+		assert.True(c, hm.accessories["plug-1"].OnValue())
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -119,5 +119,34 @@ func TestHAPManagerPublishesCommandEvents(t *testing.T) {
 		require.Equal(t, events.CommandTypeSetPower, evt.CommandType)
 	case <-time.After(time.Second):
 		t.Fatal("expected command event")
+	}
+}
+
+func TestHAPManagerCreatesBulb(t *testing.T) {
+	plugCfg := []plugs.Plug{{
+		ID:      "bulb-1",
+		Name:    "Ceiling Light",
+		Address: "1.2.3.5",
+		Type:    "bulb",
+	}}
+
+	commands := make(chan plugs.CommandEvent, 1)
+	eventBus := newTestEventsBus(t)
+	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+
+	if len(hm.accessories) != 1 {
+		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
+	}
+
+	acc := hm.GetAccessories()
+	// Bridge + 1 accessory
+	if len(acc) != 2 {
+		t.Fatalf("expected 2 accessories, got %d", len(acc))
+	}
+
+	// Check if it's a lightbulb wrapper
+	_, ok := hm.accessories["bulb-1"].(*LightbulbWrapper)
+	if !ok {
+		t.Fatalf("expected LightbulbWrapper for bulb type")
 	}
 }

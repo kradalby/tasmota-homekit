@@ -68,13 +68,14 @@ func LoadConfig(path string) (*Config, error) {
 
 // Plug describes a single Tasmota plug.
 type Plug struct {
-	ID       string       `json:"id"`
-	Name     string       `json:"name"`
-	Address  string       `json:"address"`
-	Model    string       `json:"model"`
-	Features PlugFeatures `json:"features"`
-	HomeKit  *bool        `json:"homekit,omitempty"`
-	Web      *bool        `json:"web,omitempty"`
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Address  string        `json:"address"`
+	Model    string        `json:"model,omitempty"`
+	Type     string        `json:"type,omitempty"` // "plug" or "bulb"
+	Features *PlugFeatures `json:"features,omitempty"`
+	HomeKit  *bool         `json:"homekit,omitempty"` // default true
+	Web      *bool         `json:"web,omitempty"`     // default true
 }
 
 // PlugFeatures indicates optional features of a plug.
