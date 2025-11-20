@@ -2,6 +2,7 @@ package tasmotahomekit
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,12 @@ import (
 	"github.com/kradalby/tasmota-nefit/plugs"
 	"tailscale.com/util/eventbus"
 )
+
+//go:embed assets/style.css
+var cssContent string
+
+//go:embed assets/script.js
+var jsContent string
 
 type plugStateProvider interface {
 	Snapshot() map[string]struct {
@@ -225,74 +232,6 @@ func (ws *WebServer) snapshotStatuses() []events.ConnectionStatusEvent {
 
 // renderPage renders a basic HTML page
 func (ws *WebServer) renderPage(title string, content elem.Node) string {
-	sseScript := `
-(function() {
-  function formatTime(value) {
-    if (!value) {
-      return "unknown";
-    }
-    const date = new Date(value);
-    if (isNaN(date)) {
-      return value;
-    }
-    return date.toLocaleTimeString();
-  }
-
-  function updatePlugCard(data) {
-    const card = document.querySelector('[data-plug-id="' + data.plug_id + '"]');
-    if (!card) {
-      return;
-    }
-
-    card.classList.toggle('on', data.on);
-    card.classList.toggle('off', !data.on);
-
-    const status = card.querySelector('[data-role="status-text"]');
-    if (status) {
-      status.textContent = 'Status: ' + (data.on ? 'ON' : 'OFF') + ' | Last updated: ' + formatTime(data.last_updated);
-    }
-
-    const indicator = card.querySelector('[data-role="connection-indicator"]');
-    if (indicator) {
-      indicator.classList.remove('connected', 'stale', 'disconnected');
-      indicator.classList.add(data.connection_state || 'disconnected');
-    }
-
-    const connectionText = card.querySelector('[data-role="connection-text"]');
-    if (connectionText) {
-      connectionText.textContent = data.connection_note || '';
-    }
-
-    const actionInput = card.querySelector('[data-role="action-input"]');
-    const button = card.querySelector('[data-role="toggle-button"]');
-    if (actionInput && button) {
-      if (data.on) {
-        actionInput.value = 'off';
-        button.textContent = 'Turn Off';
-        button.classList.remove('off');
-        button.classList.add('on');
-      } else {
-        actionInput.value = 'on';
-        button.textContent = 'Turn On';
-        button.classList.remove('on');
-        button.classList.add('off');
-      }
-    }
-  }
-
-  document.addEventListener('DOMContentLoaded', function() {
-    const source = new EventSource('/events');
-    source.onmessage = function(event) {
-      try {
-        const data = JSON.parse(event.data);
-        updatePlugCard(data);
-      } catch (err) {
-        console.error('invalid SSE payload', err);
-      }
-    };
-  });
-})();`
-
 	page := elem.Html(nil,
 		elem.Head(nil,
 			elem.Meta(attrs.Props{attrs.Charset: "utf-8"}),
@@ -301,47 +240,8 @@ func (ws *WebServer) renderPage(title string, content elem.Node) string {
 			elem.Script(attrs.Props{
 				attrs.Src: "https://unpkg.com/htmx.org@2.0.4",
 			}),
-			elem.Style(nil, elem.Text(`
-				body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; background: #f7f9fc; color: #1f2933; }
-				h1 { color: #0f172a; margin-bottom: 6px; }
-				p { color: #475569; margin-bottom: 4px; }
-				.plugs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
-				@media (max-width: 900px) { .plugs-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); } }
-				.plug { border: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 16px; min-height: 230px; background: white; box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08); transition: transform 0.2s ease, box-shadow 0.2s ease; }
-				.plug:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1); }
-				.plug.on { background: #ecfdf5; border-color: #34d399; }
-				.plug.off { background: #fef2f2; border-color: #f87171; }
-				.plug-info { flex: 1; }
-				.plug-name { font-size: 1.1em; font-weight: 600; color: #0f172a; }
-				.plug-status { font-size: 0.9em; color: #475569; margin-top: 4px; }
-				.connection-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 0.85em; color: #475569; }
-				.connection-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-				.connection-indicator.connected { background: #22c55e; }
-				.connection-indicator.stale { background: #facc15; }
-				.connection-indicator.disconnected { background: #ef4444; }
-				form { width: 100%; }
-				button { width: 100%; padding: 12px 16px; font-size: 1em; cursor: pointer; border: none; border-radius: 8px; font-weight: 600; transition: opacity 0.2s ease; }
-				button:hover { opacity: 0.95; }
-				button.on { background: #16a34a; color: white; }
-				button.off { background: #dc2626; color: white; }
-				.events { margin-top: 40px; padding: 20px; background: white; border-radius: 12px; max-height: 320px; overflow-y: auto; box-shadow: inset 0 0 0 1px #e2e8f0; }
-				.event { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.9em; padding: 4px 0; color: #475569; }
-				.homekit-banner { border: 2px solid #0a84ff; border-radius: 14px; background: #eef5ff; margin: 20px 0; box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08); }
-				.homekit-banner summary { cursor: pointer; padding: 16px 20px; font-weight: 600; color: #0f172a; display: flex; justify-content: space-between; align-items: center; }
-				.homekit-banner summary::-webkit-details-marker { display: none; }
-				.homekit-summary-caption { font-size: 0.9em; color: #475569; font-weight: 500; }
-				.homekit-banner[open] summary { border-bottom: 1px solid #c7dbff; }
-				.homekit-banner-content { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-				.homekit-pin { display: flex; flex-direction: column; }
-				.homekit-pin-label { font-size: 0.85em; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; }
-				.homekit-pin-value { font-size: 2em; font-weight: 700; color: #0f172a; letter-spacing: 0.08em; }
-				.qr-code-block { overflow-x: auto; }
-				.qr-code { font-family: "SFMono-Regular", Consolas, monospace; line-height: 1; font-size: 8px; background: white; padding: 12px; border-radius: 8px; border: 1px solid #c7dbff; display: inline-block; }
-				.homekit-instructions { color: #475569; margin: 0; }
-				.homekit-link { color: #0a84ff; font-weight: 600; text-decoration: none; }
-				.homekit-link:hover { text-decoration: underline; }
-			`)),
-			elem.Script(nil, elem.Text(sseScript)),
+			elem.Style(nil, elem.Text(cssContent)),
+			elem.Script(nil, elem.Text(jsContent)),
 		),
 		elem.Body(nil, content),
 	)
@@ -383,6 +283,37 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 		}
 	}
 
+	// Build electrical stats section if power monitoring is enabled
+	var statsSection elem.Node
+	if info.Features.PowerMonitoring {
+		statsSection = elem.Div(attrs.Props{attrs.Class: "electrical-stats"},
+			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Power:")),
+				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "power-value"},
+					elem.Text(fmt.Sprintf("%.1f W", state.Power)),
+				),
+			),
+			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Voltage:")),
+				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "voltage-value"},
+					elem.Text(fmt.Sprintf("%.1f V", state.Voltage)),
+				),
+			),
+			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Current:")),
+				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "current-value"},
+					elem.Text(fmt.Sprintf("%.2f A", state.Current)),
+				),
+			),
+			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Energy:")),
+				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "energy-value"},
+					elem.Text(fmt.Sprintf("%.3f kWh", state.Energy)),
+				),
+			),
+		)
+	}
+
 	return elem.Div(
 		attrs.Props{
 			attrs.ID:       "plug-" + plugID,
@@ -401,6 +332,7 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 				elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
 				elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
 			),
+			statsSection,
 		),
 		elem.Form(
 			attrs.Props{
@@ -430,6 +362,10 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 
 	for _, id := range plugIDs {
 		item := snapshot[id]
+		// Skip plugs that are not enabled for Web
+		if item.Plug.Web != nil && !*item.Plug.Web {
+			continue
+		}
 		plugElements = append(plugElements, ws.renderPlugCard(id, item.Plug, item.State))
 	}
 
@@ -514,6 +450,12 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	plug, state, exists := ws.plugProvider.Plug(plugID)
 	if !exists {
 		http.Error(w, "Plug not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if plug is enabled for Web
+	if plug.Web != nil && !*plug.Web {
+		http.Error(w, "Plug not available on web", http.StatusNotFound)
 		return
 	}
 

@@ -257,6 +257,10 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 			if !event.State.LastUpdated.IsZero() {
 				state.LastUpdated = event.State.LastUpdated
 				state.On = event.State.On
+				state.Power = event.State.Power
+				state.Voltage = event.State.Voltage
+				state.Current = event.State.Current
+				state.Energy = event.State.Energy
 			}
 
 			stateCopy := *state
@@ -265,6 +269,9 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 			slog.Debug("Merged state from eventbus",
 				"plug_id", event.PlugID,
 				"on", stateCopy.On,
+				"power", stateCopy.Power,
+				"voltage", stateCopy.Voltage,
+				"current", stateCopy.Current,
 				"mqtt_connected", stateCopy.MQTTConnected,
 				"last_seen", stateCopy.LastSeen,
 			)
@@ -430,6 +437,8 @@ func (pm *Manager) publishStateUpdate(source, plugID string, state State) {
 		Name:            name,
 		On:              state.On,
 		Power:           state.Power,
+		Voltage:         state.Voltage,
+		Current:         state.Current,
 		Energy:          state.Energy,
 		MQTTConnected:   state.MQTTConnected,
 		LastSeen:        state.LastSeen,

@@ -137,7 +137,33 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 			"plug_id", plugID,
 			"on", partialState.On,
 		)
-	} else {
+	}
+
+	// Parse electrical stats from ENERGY field (from SENSOR telemetry)
+	if energy, ok := msg["ENERGY"].(map[string]interface{}); ok {
+		if power, ok := energy["Power"].(float64); ok {
+			partialState.Power = power
+		}
+		if voltage, ok := energy["Voltage"].(float64); ok {
+			partialState.Voltage = voltage
+		}
+		if current, ok := energy["Current"].(float64); ok {
+			partialState.Current = current
+		}
+		if total, ok := energy["Total"].(float64); ok {
+			partialState.Energy = total
+		}
+
+		slog.Debug("Electrical stats updated from MQTT",
+			"plug_id", plugID,
+			"power", partialState.Power,
+			"voltage", partialState.Voltage,
+			"current", partialState.Current,
+			"energy", partialState.Energy,
+		)
+	}
+
+	if powerState == "" && partialState.Power == 0 && partialState.Voltage == 0 {
 		slog.Debug("Plug connection tracked via MQTT",
 			"plug_id", plugID,
 			"last_seen", partialState.LastSeen,

@@ -23,7 +23,11 @@
       "features": {
         "power_monitoring": true,   // Power usage monitoring (watts)
         "energy_tracking": true      // Energy consumption tracking (kWh)
-      }
+      },
+
+      // Optional: Availability flags (both default to true if not specified)
+      "homekit": true,  // Expose this plug to HomeKit
+      "web": true       // Show this plug in the Web UI
     },
 
     {
@@ -41,7 +45,10 @@
       "features": {
         "power_monitoring": false,
         "energy_tracking": false
-      }
+      },
+      // Example: Only show in HomeKit, not in Web UI
+      "homekit": true,
+      "web": false
     }
   ]
 }
