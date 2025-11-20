@@ -171,9 +171,20 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	// Publish to eventbus - PlugManager will merge with its state
+	var updatedFields []string
+	if powerState != "" {
+		updatedFields = append(updatedFields, "On")
+	}
+	if _, ok := msg["ENERGY"]; ok {
+		updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
+	}
+	// Always update connectivity fields
+	updatedFields = append(updatedFields, "MQTTConnected", "LastSeen", "LastUpdated")
+
 	h.statePublisher.Publish(plugs.StateChangedEvent{
-		PlugID: plugID,
-		State:  partialState,
+		PlugID:        plugID,
+		State:         partialState,
+		UpdatedFields: updatedFields,
 	})
 
 	return pk, nil
