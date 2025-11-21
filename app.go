@@ -337,7 +337,7 @@ func Main() {
 		os.Exit(1)
 	}
 
-	webServer := NewWebServer(logger, plugManager, commands, eventBus, kraWeb, cfg.HAPPin, qrCode)
+	webServer := NewWebServer(logger, plugManager, plugManager, eventBus, kraWeb, cfg.HAPPin, qrCode)
 	webServer.LogEvent("Server starting...")
 	webServer.Start(ctx)
 	defer webServer.Close()
