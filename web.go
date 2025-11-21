@@ -232,18 +232,18 @@ func (ws *WebServer) snapshotStatuses() []events.ConnectionStatusEvent {
 
 // renderPage renders a basic HTML page
 func (ws *WebServer) renderPage(title string, content elem.Node) string {
-	page := elem.Html(nil,
-		elem.Head(nil,
+	page := elem.Html(attrs.Props{},
+		elem.Head(attrs.Props{},
 			elem.Meta(attrs.Props{attrs.Charset: "utf-8"}),
 			elem.Meta(attrs.Props{attrs.Name: "viewport", attrs.Content: "width=device-width, initial-scale=1"}),
-			elem.Title(nil, elem.Text(title)),
+			elem.Title(attrs.Props{}, elem.Text(title)),
 			elem.Script(attrs.Props{
 				attrs.Src: "https://unpkg.com/htmx.org@2.0.4",
 			}),
-			elem.Style(nil, elem.Text(cssContent)),
-			elem.Script(nil, elem.Text(jsContent)),
+			elem.Style(attrs.Props{}, elem.Text(cssContent)),
+			elem.Script(attrs.Props{}, elem.Text(jsContent)),
 		),
-		elem.Body(nil, content),
+		elem.Body(attrs.Props{}, content),
 	)
 	return page.Render()
 }
@@ -283,10 +283,34 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 		}
 	}
 
-	// Build electrical stats section if power monitoring is enabled
-	var statsSection elem.Node
-	if info.Features.PowerMonitoring {
-		statsSection = elem.Div(attrs.Props{attrs.Class: "electrical-stats"},
+	// Icon selection
+	icon := "🔌" // Default plug icon
+	if info.Type == "bulb" {
+		icon = "💡"
+	}
+
+	// Build children for the main card div
+	cardChildren := []elem.Node{
+		elem.Div(attrs.Props{attrs.Class: "plug-header"},
+			elem.Div(attrs.Props{attrs.Class: "plug-icon"}, elem.Text(icon)),
+			elem.Div(attrs.Props{attrs.Class: "plug-info"},
+				elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
+				elem.Div(attrs.Props{attrs.Class: "plug-status", "data-role": "status-text"},
+					elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
+						statusText,
+						state.LastUpdated.Format("15:04:05"),
+					)),
+				),
+				elem.Div(attrs.Props{attrs.Class: "connection-status"},
+					elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
+					elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
+				),
+			),
+		),
+	}
+
+	if info.Features != nil && info.Features.PowerMonitoring {
+		cardChildren = append(cardChildren, elem.Div(attrs.Props{attrs.Class: "electrical-stats"},
 			elem.Div(attrs.Props{attrs.Class: "stat-item"},
 				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Power:")),
 				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "power-value"},
@@ -311,14 +335,21 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 					elem.Text(fmt.Sprintf("%.3f kWh", state.Energy)),
 				),
 			),
-		)
+		))
 	}
 
-	// Icon selection
-	icon := "🔌" // Default plug icon
-	if info.Type == "bulb" {
-		icon = "💡"
-	}
+	cardChildren = append(cardChildren, elem.Form(
+		attrs.Props{
+			"hx-post":   "/toggle/" + plugID,
+			"hx-target": "#plug-" + plugID,
+			"hx-swap":   "outerHTML",
+		},
+		elem.Input(attrs.Props{attrs.Type: "hidden", attrs.Name: "action", attrs.Value: buttonAction, "data-role": "action-input"}),
+		elem.Button(
+			attrs.Props{attrs.Type: "submit", attrs.Class: buttonClass, "data-role": "toggle-button"},
+			elem.Text(buttonText),
+		),
+	))
 
 	return elem.Div(
 		attrs.Props{
@@ -326,35 +357,7 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 			attrs.Class:    "plug " + statusClass,
 			"data-plug-id": plugID,
 		},
-		elem.Div(attrs.Props{attrs.Class: "plug-header"},
-			elem.Div(attrs.Props{attrs.Class: "plug-icon"}, elem.Text(icon)),
-			elem.Div(attrs.Props{attrs.Class: "plug-info"},
-				elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
-				elem.Div(attrs.Props{attrs.Class: "plug-status", "data-role": "status-text"},
-					elem.Text(fmt.Sprintf("Status: %s | Last updated: %s",
-						statusText,
-						state.LastUpdated.Format("15:04:05"),
-					)),
-				),
-				elem.Div(attrs.Props{attrs.Class: "connection-status"},
-					elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
-					elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
-				),
-			),
-		),
-		statsSection,
-		elem.Form(
-			attrs.Props{
-				"hx-post":   "/toggle/" + plugID,
-				"hx-target": "#plug-" + plugID,
-				"hx-swap":   "outerHTML",
-			},
-			elem.Input(attrs.Props{attrs.Type: "hidden", attrs.Name: "action", attrs.Value: buttonAction, "data-role": "action-input"}),
-			elem.Button(
-				attrs.Props{attrs.Type: "submit", attrs.Class: buttonClass, "data-role": "toggle-button"},
-				elem.Text(buttonText),
-			),
-		),
+		cardChildren...,
 	)
 }
 
@@ -428,14 +431,14 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	content := elem.Div(nil,
-		elem.H1(nil, elem.Text("Tasmota HomeKit Bridge")),
-		elem.P(nil, elem.Text(fmt.Sprintf("Managing %d plugs", len(snapshot)))),
+	content := elem.Div(attrs.Props{},
+		elem.H1(attrs.Props{}, elem.Text("Tasmota HomeKit Bridge")),
+		elem.P(attrs.Props{}, elem.Text(fmt.Sprintf("Managing %d plugs", len(snapshot)))),
 		homekitSection,
 		elem.Div(attrs.Props{attrs.Class: "plugs-grid"}, plugElements...),
 		elem.Div(attrs.Props{attrs.Class: "events"},
-			elem.H2(nil, elem.Text("Recent Events")),
-			elem.Div(nil, eventElements...),
+			elem.H2(attrs.Props{}, elem.Text("Recent Events")),
+			elem.Div(attrs.Props{}, eventElements...),
 		),
 	)
 
@@ -510,54 +513,54 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 	ws.sseClientsMu.RUnlock()
 
 	rows := []elem.Node{
-		elem.Tr(nil,
-			elem.Th(nil, elem.Text("Plug ID")),
-			elem.Th(nil, elem.Text("Name")),
-			elem.Th(nil, elem.Text("On")),
-			elem.Th(nil, elem.Text("Last Updated")),
-			elem.Th(nil, elem.Text("Last Seen")),
-			elem.Th(nil, elem.Text("Connection")),
+		elem.Tr(attrs.Props{},
+			elem.Th(attrs.Props{}, elem.Text("Plug ID")),
+			elem.Th(attrs.Props{}, elem.Text("Name")),
+			elem.Th(attrs.Props{}, elem.Text("On")),
+			elem.Th(attrs.Props{}, elem.Text("Last Updated")),
+			elem.Th(attrs.Props{}, elem.Text("Last Seen")),
+			elem.Th(attrs.Props{}, elem.Text("Connection")),
 		),
 	}
 
 	for _, evt := range snapshot {
 		rows = append(rows,
-			elem.Tr(nil,
-				elem.Td(nil, elem.Text(evt.PlugID)),
-				elem.Td(nil, elem.Text(evt.Name)),
-				elem.Td(nil, elem.Text(fmt.Sprintf("%t", evt.On))),
-				elem.Td(nil, elem.Text(evt.LastUpdated.Format(time.RFC3339))),
-				elem.Td(nil, elem.Text(evt.LastSeen.Format(time.RFC3339))),
-				elem.Td(nil, elem.Text(evt.ConnectionNote)),
+			elem.Tr(attrs.Props{},
+				elem.Td(attrs.Props{}, elem.Text(evt.PlugID)),
+				elem.Td(attrs.Props{}, elem.Text(evt.Name)),
+				elem.Td(attrs.Props{}, elem.Text(fmt.Sprintf("%t", evt.On))),
+				elem.Td(attrs.Props{}, elem.Text(evt.LastUpdated.Format(time.RFC3339))),
+				elem.Td(attrs.Props{}, elem.Text(evt.LastSeen.Format(time.RFC3339))),
+				elem.Td(attrs.Props{}, elem.Text(evt.ConnectionNote)),
 			),
 		)
 	}
 
 	statusRows := []elem.Node{
-		elem.Tr(nil,
-			elem.Th(nil, elem.Text("Component")),
-			elem.Th(nil, elem.Text("Status")),
-			elem.Th(nil, elem.Text("Updated")),
-			elem.Th(nil, elem.Text("Error")),
+		elem.Tr(attrs.Props{},
+			elem.Th(attrs.Props{}, elem.Text("Component")),
+			elem.Th(attrs.Props{}, elem.Text("Status")),
+			elem.Th(attrs.Props{}, elem.Text("Updated")),
+			elem.Th(attrs.Props{}, elem.Text("Error")),
 		),
 	}
 
 	for _, status := range ws.snapshotStatuses() {
 		statusRows = append(statusRows,
-			elem.Tr(nil,
-				elem.Td(nil, elem.Text(status.Component)),
-				elem.Td(nil, elem.Text(string(status.Status))),
-				elem.Td(nil, elem.Text(status.Timestamp.Format(time.RFC3339))),
-				elem.Td(nil, elem.Text(status.Error)),
+			elem.Tr(attrs.Props{},
+				elem.Td(attrs.Props{}, elem.Text(status.Component)),
+				elem.Td(attrs.Props{}, elem.Text(string(status.Status))),
+				elem.Td(attrs.Props{}, elem.Text(status.Timestamp.Format(time.RFC3339))),
+				elem.Td(attrs.Props{}, elem.Text(status.Error)),
 			),
 		)
 	}
 
-	content := elem.Div(nil,
-		elem.H1(nil, elem.Text("EventBus Debug")),
-		elem.P(nil, elem.Text(fmt.Sprintf("Connected SSE clients: %d", clientCount))),
+	content := elem.Div(attrs.Props{},
+		elem.H1(attrs.Props{}, elem.Text("EventBus Debug")),
+		elem.P(attrs.Props{}, elem.Text(fmt.Sprintf("Connected SSE clients: %d", clientCount))),
 		elem.Table(attrs.Props{"border": "1", "cellpadding": "4", "cellspacing": "0"}, rows...),
-		elem.H2(nil, elem.Text("Component Status")),
+		elem.H2(attrs.Props{}, elem.Text("Component Status")),
 		elem.Table(attrs.Props{"border": "1", "cellpadding": "4", "cellspacing": "0"}, statusRows...),
 	)
 

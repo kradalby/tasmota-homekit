@@ -2,6 +2,7 @@ package tasmotahomekit
 
 import (
 	"context"
+	"hash/fnv"
 	"log/slog"
 	"time"
 
@@ -10,6 +11,12 @@ import (
 	"github.com/kradalby/tasmota-nefit/plugs"
 	"tailscale.com/util/eventbus"
 )
+
+func hashString(s string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(s))
+	return h.Sum64()
+}
 
 // Switchable is an interface for accessories that can be turned on/off
 type Switchable interface {
@@ -109,17 +116,23 @@ func NewHAPManager(
 		}
 
 		var switchable Switchable
+		var acc *accessory.A
 
 		if plug.Type == "bulb" {
 			lightbulb := accessory.NewLightbulb(info)
+			acc = lightbulb.A
 			switchable = &LightbulbWrapper{lightbulb}
-			slog.Info("Created HomeKit lightbulb", "plug_id", plug.ID, "name", plug.Name)
+			slog.Info("Created HomeKit lightbulb", "plug_id", plug.ID, "name", plug.Name, "id", hashString(plug.ID))
 		} else {
 			// Default to outlet (plug)
 			outlet := accessory.NewOutlet(info)
+			acc = outlet.A
 			switchable = &OutletWrapper{outlet}
-			slog.Info("Created HomeKit outlet", "plug_id", plug.ID, "name", plug.Name)
+			slog.Info("Created HomeKit outlet", "plug_id", plug.ID, "name", plug.Name, "id", hashString(plug.ID))
 		}
+
+		// Set explicit ID to avoid collisions
+		acc.Id = hashString(plug.ID)
 
 		// Capture plug ID for closure
 		plugID := plug.ID
