@@ -35,12 +35,17 @@ type plugStateProvider interface {
 	Plug(string) (plugs.Plug, plugs.State, bool)
 }
 
+type PlugController interface {
+	SetPower(ctx context.Context, plugID string, on bool) error
+	RefreshAll(ctx context.Context)
+}
+
 // WebServer manages the web UI
 type WebServer struct {
 	logger           *slog.Logger
 	kraweb           *web.KraWeb
 	plugProvider     plugStateProvider
-	commands         chan plugs.CommandEvent
+	controller       PlugController
 	eventLog         []string
 	eventBus         *events.Bus
 	client           *eventbus.Client
@@ -58,7 +63,7 @@ type WebServer struct {
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, commands chan plugs.CommandEvent, bus *events.Bus, kraweb *web.KraWeb, hapPin, qrCode string) *WebServer {
+func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controller PlugController, bus *events.Bus, kraweb *web.KraWeb, hapPin, qrCode string) *WebServer {
 	client, err := bus.Client(events.ClientWeb)
 	if err != nil {
 		panic(fmt.Sprintf("failed to create web client: %v", err))
@@ -68,7 +73,7 @@ func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, commands 
 		logger:           logger,
 		kraweb:           kraweb,
 		plugProvider:     plugProvider,
-		commands:         commands,
+		controller:       controller,
 		eventLog:         make([]string, 0, 100),
 		eventBus:         bus,
 		client:           client,
@@ -363,6 +368,9 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 
 // HandleIndex renders the main dashboard
 func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
+	// Trigger a concurrent refresh of all plugs
+	ws.controller.RefreshAll(r.Context())
+
 	var plugElements []elem.Node
 
 	snapshot := ws.plugProvider.Snapshot()
@@ -474,19 +482,21 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	action := r.FormValue("action")
 	on := action == "on"
 
-	ws.commands <- plugs.CommandEvent{
-		PlugID: plugID,
-		On:     on,
+	if err := ws.controller.SetPower(r.Context(), plugID, on); err != nil {
+		ws.logger.Error("Failed to set power", "plug_id", plugID, "error", err)
+		http.Error(w, "Failed to set power", http.StatusInternalServerError)
+		return
 	}
-
-	ws.publishCommand(plugID, on)
 
 	ws.LogEvent(fmt.Sprintf("Web UI: Toggle %s → %v", plugID, on))
 
 	// If HTMX request, return partial HTML
 	if r.Header.Get("HX-Request") == "true" {
-		// Wait a moment for the state to update
-		time.Sleep(100 * time.Millisecond)
+		// Fetch updated state immediately
+		if updatedPlug, updatedState, ok := ws.plugProvider.Plug(plugID); ok {
+			plug = updatedPlug
+			state = updatedState
+		}
 
 		if updatedPlug, updatedState, ok := ws.plugProvider.Plug(plugID); ok {
 			plug = updatedPlug

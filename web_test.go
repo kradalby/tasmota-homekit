@@ -14,8 +14,6 @@ import (
 	"github.com/kradalby/tasmota-nefit/events"
 	"github.com/kradalby/tasmota-nefit/plugs"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"tailscale.com/util/eventbus"
 )
 
 type fakePlugProvider struct {
@@ -71,7 +69,25 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.CommandEvent, *events.Bus) {
+type mockPlugController struct {
+	setPowerFunc func(ctx context.Context, plugID string, on bool) error
+	refreshFunc  func(ctx context.Context)
+}
+
+func (m *mockPlugController) SetPower(ctx context.Context, plugID string, on bool) error {
+	if m.setPowerFunc != nil {
+		return m.setPowerFunc(ctx, plugID, on)
+	}
+	return nil
+}
+
+func (m *mockPlugController) RefreshAll(ctx context.Context) {
+	if m.refreshFunc != nil {
+		m.refreshFunc(ctx)
+	}
+}
+
+func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, *mockPlugController, *events.Bus) {
 	t.Helper()
 
 	bus, err := events.New(testLogger())
@@ -79,12 +95,12 @@ func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.C
 		t.Fatalf("events.New() error = %v", err)
 	}
 	provider := newFakePlugProvider()
-	cmds := make(chan plugs.CommandEvent, 1)
+	controller := &mockPlugController{}
 
 	ws := NewWebServer(
 		testLogger(),
 		provider,
-		cmds,
+		controller,
 		bus,
 		nil,
 		"00102003",
@@ -95,7 +111,7 @@ func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, chan plugs.C
 		ws.Close()
 	})
 
-	return ws, provider, cmds, bus
+	return ws, provider, controller, bus
 }
 
 func TestHandleIndex(t *testing.T) {
@@ -126,13 +142,20 @@ func TestHandleIndex(t *testing.T) {
 	}
 }
 
-func TestHandleTogglePublishesCommand(t *testing.T) {
-	ws, _, cmds, bus := newTestWebServer(t)
+func TestHandleToggleCallsSetPower(t *testing.T) {
+	ws, _, controller, _ := newTestWebServer(t)
 
-	client, err := bus.Client(events.ClientWeb)
-	require.NoError(t, err)
-	sub := eventbus.Subscribe[events.CommandEvent](client)
-	t.Cleanup(sub.Close)
+	called := false
+	controller.setPowerFunc = func(ctx context.Context, plugID string, on bool) error {
+		called = true
+		if plugID != "plug-1" {
+			t.Errorf("plugID = %s, want plug-1", plugID)
+		}
+		if !on {
+			t.Errorf("on = %v, want true", on)
+		}
+		return nil
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -141,23 +164,8 @@ func TestHandleTogglePublishesCommand(t *testing.T) {
 
 	ws.HandleToggle(rec, req)
 
-	select {
-	case cmd := <-cmds:
-		if cmd.PlugID != "plug-1" || !cmd.On {
-			t.Fatalf("unexpected command: %+v", cmd)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expected command event")
-	}
-
-	select {
-	case evt := <-sub.Events():
-		require.Equal(t, "plug-1", evt.PlugID)
-		require.NotNil(t, evt.On)
-		require.True(t, *evt.On)
-		require.Equal(t, events.CommandTypeSetPower, evt.CommandType)
-	case <-time.After(time.Second):
-		t.Fatal("expected command publish")
+	if !called {
+		t.Fatal("SetPower was not called")
 	}
 
 	if rec.Code != http.StatusOK {

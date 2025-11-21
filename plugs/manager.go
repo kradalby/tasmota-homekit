@@ -219,6 +219,32 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	return &copy, nil
 }
 
+// RefreshAll triggers a status update for all plugs concurrently.
+func (pm *Manager) RefreshAll(ctx context.Context) {
+	var wg sync.WaitGroup
+	pm.mu.RLock()
+	ids := make([]string, 0, len(pm.plugs))
+	for id := range pm.plugs {
+		ids = append(ids, id)
+	}
+	pm.mu.RUnlock()
+
+	for _, id := range ids {
+		wg.Add(1)
+		go func(plugID string) {
+			defer wg.Done()
+			// Use a short timeout for individual refreshes to avoid blocking the whole page load too long
+			refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+
+			if _, err := pm.GetStatus(refreshCtx, plugID); err != nil {
+				slog.Debug("Failed to refresh plug status", "plug_id", plugID, "error", err)
+			}
+		}(id)
+	}
+	wg.Wait()
+}
+
 // ProcessCommands handles command events.
 func (pm *Manager) ProcessCommands(ctx context.Context) {
 	for {
