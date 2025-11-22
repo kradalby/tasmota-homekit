@@ -173,6 +173,14 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 	})
 	pm.publishStateUpdate("command", plugID, stateCopy)
 
+	// Trigger a status refresh after a short delay to capture power usage changes
+	go func() {
+		time.Sleep(2 * time.Second)
+		if _, err := pm.GetStatus(context.Background(), plugID); err != nil {
+			slog.Debug("Failed to refresh status after toggle", "plug_id", plugID, "error", err)
+		}
+	}()
+
 	return nil
 }
 
@@ -188,16 +196,30 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 		return nil, fmt.Errorf("failed to get status: %w", err)
 	}
 
+	slog.Debug("Raw Tasmota Status response", "plug_id", plugID, "response", string(response))
+
 	var statusResp struct {
 		Status struct {
-			Power string `json:"Power"`
+			Power int `json:"Power"`
 		} `json:"Status"`
+		StatusSTS struct {
+			Power string `json:"POWER"`
+		} `json:"StatusSTS"`
+		StatusSNS struct {
+			Energy struct {
+				Power   float64 `json:"Power"`
+				Voltage float64 `json:"Voltage"`
+				Current float64 `json:"Current"`
+				Total   float64 `json:"Total"`
+			} `json:"ENERGY"`
+		} `json:"StatusSNS"`
 	}
 
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
 	if err := json.Unmarshal(response, &statusResp); err != nil {
+		// Fallback for simple POWER response
 		var altResp struct {
 			Power string `json:"POWER"`
 		}
@@ -212,7 +234,20 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	}
 
 	state := pm.states[plugID]
-	state.On = statusResp.Status.Power == "ON"
+
+	// Update Power State (prefer StatusSTS, fallback to Status)
+	if statusResp.StatusSTS.Power != "" {
+		state.On = statusResp.StatusSTS.Power == "ON"
+	} else {
+		state.On = statusResp.Status.Power == 1
+	}
+
+	// Update Energy Stats
+	state.Power = statusResp.StatusSNS.Energy.Power
+	state.Voltage = statusResp.StatusSNS.Energy.Voltage
+	state.Current = statusResp.StatusSNS.Energy.Current
+	state.Energy = statusResp.StatusSNS.Energy.Total
+
 	state.LastUpdated = time.Now()
 	copy := *state
 	pm.publishStateUpdate("status", plugID, copy)

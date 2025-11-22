@@ -11,7 +11,7 @@
   }
 
   function updatePlugCard(data) {
-    console.log('SSE Data:', data);
+    console.log('SSE Data received:', data);
     const card = document.querySelector('[data-plug-id="' + data.plug_id + '"]');
     if (!card) {
       return;
@@ -20,9 +20,14 @@
     card.classList.toggle('on', data.on);
     card.classList.toggle('off', !data.on);
 
-    const status = card.querySelector('[data-role="status-text"]');
-    if (status) {
-      status.textContent = 'Status: ' + (data.on ? 'ON' : 'OFF') + ' | Last updated: ' + formatTime(data.last_updated);
+    const statusLabel = card.querySelector('[data-role="status-label"]');
+    if (statusLabel) {
+      statusLabel.textContent = 'Status: ' + (data.on ? 'ON' : 'OFF');
+    }
+
+    const lastUpdated = card.querySelector('[data-role="last-updated"]');
+    if (lastUpdated) {
+      lastUpdated.textContent = 'Last updated: ' + formatTime(data.last_updated);
     }
 
     const indicator = card.querySelector('[data-role="connection-indicator"]');
