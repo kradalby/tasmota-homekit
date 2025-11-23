@@ -8,37 +8,26 @@ import (
 
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
-	"tailscale.com/tsweb"
 )
 
-// SetupDebugHandlers registers all debug handlers with the tsweb debugger
+// SetupDebugHandlers registers the HAP debug handler without using tsweb.Debugger to avoid pattern conflicts
 func SetupDebugHandlers(kraWeb interface {
 	Handle(pattern string, handler http.Handler)
 }, hapManager *HAPManager) {
-	// Create a submux for debug handlers
-	debugMux := http.NewServeMux()
-	debug := tsweb.Debugger(debugMux)
-
-	// HomeKit state debug handler
-	debug.Handle("hap", "HomeKit accessories and runtime info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Directly register the HAP debug endpoint
+	kraWeb.Handle("/debug/hap", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		debugInfo := hapManager.DebugInfo()
-
 		data, err := json.MarshalIndent(debugInfo, "", "  ")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to marshal debug info: %v", err), http.StatusInternalServerError)
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write(data); err != nil {
-			// Error already written to client, just log it
 			return
 		}
 	}))
-
-	// Register the debug mux with kraWeb
-	kraWeb.Handle("/debug/", http.StripPrefix("/debug", debugMux))
 }
 
 // HAPDebugInfo contains debug information about the HomeKit service
