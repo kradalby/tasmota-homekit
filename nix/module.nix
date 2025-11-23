@@ -4,8 +4,16 @@ with lib;
 
 let
   cfg = config.services.tasmota-homekit;
+  hapDir = "${cfg.dataDir}/hap";
+  tailscaleDir = "${cfg.dataDir}/tailscale";
 in
 {
+  imports = [
+    (mkRenamedOptionModule
+      [ "services" "tasmota-homekit" "hap" "storagePath" ]
+      [ "services" "tasmota-homekit" "dataDir" ])
+  ];
+
   options.services.tasmota-homekit = {
     enable = mkEnableOption "Tasmota HomeKit bridge service";
 
@@ -79,18 +87,19 @@ in
       };
     };
 
+    dataDir = mkOption {
+      type = types.path;
+      default = "/var/lib/tasmota-homekit";
+      description = "Base directory for persistent data (contains HAP + Tailscale state).";
+      example = "/var/lib/tasmota-homekit";
+    };
+
     hap = {
       pin = mkOption {
         type = types.str;
         default = "00102003";
         description = "HomeKit pairing PIN (8 digits).";
         example = "12345678";
-      };
-
-      storagePath = mkOption {
-        type = types.path;
-        default = "/var/lib/tasmota-homekit";
-        description = "Directory for HAP pairing data and other persistent state.";
       };
     };
 
@@ -145,14 +154,16 @@ in
         isSystemUser = true;
         group = cfg.group;
         description = "Tasmota HomeKit service user";
-        home = cfg.hap.storagePath;
+        home = cfg.dataDir;
         createHome = true;
       };
 
       users.groups.${cfg.group} = { };
 
       systemd.tmpfiles.rules = [
-        "d ${cfg.hap.storagePath} 0750 ${cfg.user} ${cfg.group} - -"
+        "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} - -"
+        "d ${hapDir} 0750 ${cfg.user} ${cfg.group} - -"
+        "d ${tailscaleDir} 0750 ${cfg.user} ${cfg.group} - -"
       ];
     }
 
@@ -180,11 +191,12 @@ in
             TASMOTA_HOMEKIT_WEB_PORT = toString cfg.ports.web;
             TASMOTA_HOMEKIT_MQTT_PORT = toString cfg.ports.mqtt;
             TASMOTA_HOMEKIT_HAP_PIN = cfg.hap.pin;
-            TASMOTA_HOMEKIT_HAP_STORAGE_PATH = cfg.hap.storagePath;
+            TASMOTA_HOMEKIT_HAP_STORAGE_PATH = hapDir;
             TASMOTA_HOMEKIT_PLUGS_CONFIG = toString cfg.plugsConfig;
             TASMOTA_HOMEKIT_LOG_LEVEL = cfg.log.level;
             TASMOTA_HOMEKIT_LOG_FORMAT = cfg.log.format;
             TASMOTA_HOMEKIT_TS_HOSTNAME = cfg.tailscale.hostname;
+            TASMOTA_HOMEKIT_TS_STATE_DIR = tailscaleDir;
           } // cfg.environment;
 
           tailscaleExport =
@@ -225,7 +237,7 @@ in
             Restart = "on-failure";
             RestartSec = "10s";
 
-            WorkingDirectory = cfg.hap.storagePath;
+            WorkingDirectory = cfg.dataDir;
 
             StandardOutput = "journal";
             StandardError = "journal";

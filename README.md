@@ -93,7 +93,7 @@ The embedded kra web server exposes a consistent set of endpoints (locally and o
 - `/qrcode` – Plain-text QR/PIN output for headless setups.
 - `/debug/eventbus` – Diagnostics page mirroring `nefit-homekit` (live state + SSE client count).
 
-Set `TASMOTA_HOMEKIT_TS_AUTHKEY` and `TASMOTA_HOMEKIT_TS_HOSTNAME` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed.
+Set `TASMOTA_HOMEKIT_TS_AUTHKEY` and `TASMOTA_HOMEKIT_TS_HOSTNAME` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed. `TASMOTA_HOMEKIT_TS_STATE_DIR` controls where the embedded tsnet instance stores its state (defaults to `./data/tailscale` and maps to `dataDir/tailscale` when using the NixOS module).
 
 ## NixOS Deployment
 
@@ -133,10 +133,10 @@ Add to your NixOS configuration:
       mqtt = 1883;  # MQTT broker
     };
 
-    # HomeKit configuration
+    # Data + HomeKit configuration
+    dataDir = "/var/lib/tasmota-homekit";  # Base directory; module uses dataDir/hap and dataDir/tailscale
     hap = {
       pin = "12345678";  # Default: "00102003"
-      storagePath = "/var/lib/tasmota-homekit/hap";  # Default path
     };
 
     # Path to plugs configuration file (required)
@@ -175,7 +175,9 @@ systemctl restart tasmota-homekit
 
 **Storage Locations:**
 
-- State: `/var/lib/tasmota-homekit/`
+- Data dir (configurable via `services.tasmota-homekit.dataDir`): `/var/lib/tasmota-homekit/`
+- HAP pairing state: `$dataDir/hap`
+- Tailscale state: `$dataDir/tailscale`
 - Cache: `/var/cache/tasmota-homekit/`
 - Runtime: `/run/tasmota-homekit/`
 
@@ -211,8 +213,8 @@ services.tasmota-homekit.ports.mqtt         # Embedded MQTT broker port (default
 services.tasmota-homekit.bindAddresses.hap  # IP for HAP listener (default 0.0.0.0)
 services.tasmota-homekit.bindAddresses.web  # IP for web listener (default 0.0.0.0)
 services.tasmota-homekit.bindAddresses.mqtt # IP for MQTT listener (default 0.0.0.0)
+services.tasmota-homekit.dataDir            # Base directory for persistent data (contains hap + tailscale)
 services.tasmota-homekit.hap.pin            # HomeKit PIN (8 digits)
-services.tasmota-homekit.hap.storagePath    # Directory for pairing data and runtime state
 services.tasmota-homekit.plugsConfig        # HuJSON description of plugs
 services.tasmota-homekit.log.level          # slog level (debug/info/warn/error)
 services.tasmota-homekit.log.format         # slog format (json/console)

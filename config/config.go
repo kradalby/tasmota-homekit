@@ -38,6 +38,7 @@ type Config struct {
 	// Tailscale configuration
 	TailscaleHostname string `env:"TASMOTA_HOMEKIT_TS_HOSTNAME,default=tasmota-homekit"`
 	TailscaleAuthKey  string `env:"TASMOTA_HOMEKIT_TS_AUTHKEY"`
+	TailscaleStateDir string `env:"TASMOTA_HOMEKIT_TS_STATE_DIR,default=./data/tailscale"`
 
 	// Logging options
 	LogLevel  string `env:"TASMOTA_HOMEKIT_LOG_LEVEL,default=info"`
@@ -81,6 +82,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validateLogFormat(c.LogFormat); err != nil {
 		return err
+	}
+	if c.TailscaleStateDir == "" {
+		return fmt.Errorf("TailscaleStateDir cannot be empty")
 	}
 	return nil
 }
