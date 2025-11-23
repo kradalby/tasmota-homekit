@@ -148,21 +148,6 @@ func (ws *WebServer) publishConnectionStatus(status events.ConnectionStatus, err
 	})
 }
 
-func (ws *WebServer) publishCommand(plugID string, on bool) {
-	if ws.eventBus == nil || ws.client == nil {
-		return
-	}
-
-	desiredState := on
-	ws.eventBus.PublishCommand(ws.client, events.CommandEvent{
-		Timestamp:   time.Now(),
-		Source:      "web",
-		PlugID:      plugID,
-		CommandType: events.CommandTypeSetPower,
-		On:          &desiredState,
-	})
-}
-
 func (ws *WebServer) processStateChanges(ctx context.Context) {
 	for {
 		select {
