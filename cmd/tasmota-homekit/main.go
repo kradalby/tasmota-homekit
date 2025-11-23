@@ -1,7 +1,7 @@
 package main
 
 import (
-	tasmota "github.com/kradalby/tasmota-nefit"
+	tasmota "github.com/kradalby/tasmota-homekit"
 )
 
 func main() {

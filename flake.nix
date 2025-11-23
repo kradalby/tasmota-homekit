@@ -11,6 +11,7 @@
       (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          lib = pkgs.lib;
 
           # Use Go 1.25 to satisfy go.mod requirement of 1.25.3
           go = pkgs.go_1_25;
@@ -50,12 +51,12 @@
 
             src = ./.;
             subPackages = [ "./cmd/tasmota-homekit" ];
-            vendorHash = "sha256-NBF2buuT49Ulf88LaaMXKWzJxKuWD0w5GiUKZ0LgQw0=";
+            vendorHash = "sha256-zKzjMBE+V1IS+v/k7K9kfzYn+jcktiyrY8rV1Okuynw=";
 
             ldflags = [
               "-s"
               "-w"
-              "-X github.com/kradalby/tasmota-nefit.version=${self.rev or "dev"}"
+              "-X github.com/kradalby/tasmota-homekit.version=${self.rev or "dev"}"
             ];
 
             meta = with pkgs.lib; {

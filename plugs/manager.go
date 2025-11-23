@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/kradalby/tasmota-go"
-	"github.com/kradalby/tasmota-nefit/events"
+	"github.com/kradalby/tasmota-homekit/events"
 	"tailscale.com/util/eventbus"
 )
 

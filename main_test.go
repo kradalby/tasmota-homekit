@@ -3,7 +3,7 @@ package tasmotahomekit
 import (
 	"testing"
 
-	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
 func TestLoadPlugsConfig(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kradalby/tasmota-nefit/events"
+	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"

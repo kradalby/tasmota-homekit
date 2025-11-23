@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kradalby/tasmota-nefit/events"
+	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/stretchr/testify/require"
 )
 

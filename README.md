@@ -145,7 +145,7 @@ Add to your NixOS configuration:
     # Optional: Tailscale configuration for remote access
     # Setting authKeyFile enables Tailscale integration
     tailscale = {
-      hostname = "tasmota-nefit";  # Tailscale hostname (default: "tasmota-nefit")
+      hostname = "tasmota-homekit";  # Tailscale hostname (default: "tasmota-homekit")
       authKeyFile = "/run/secrets/tailscale-authkey";  # Path to auth key file (enables Tailscale when set)
     };
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/kradalby/tasmota-homekit/plugs"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"tailscale.com/util/eventbus"

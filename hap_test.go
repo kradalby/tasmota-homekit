@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/brutella/hap/accessory"
-	"github.com/kradalby/tasmota-nefit/events"
-	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/plugs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/util/eventbus"

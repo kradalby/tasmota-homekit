@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/kradalby/tasmota-homekit/plugs"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"tailscale.com/util/eventbus"
 )
