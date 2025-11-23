@@ -333,6 +333,7 @@ func Main() {
 		LocalAddr:       cfg.WebAddrPort().String(),
 		AuthKey:         cfg.TailscaleAuthKey,
 		EnableTailscale: enableTailscale,
+		TailscaleDir:    cfg.TailscaleStateDir,
 	}
 
 	kraWeb, err := web.NewServer(kraConfig, kraOpts...)
