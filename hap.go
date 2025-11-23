@@ -74,6 +74,7 @@ func (w *LightbulbWrapper) ID() uint64 {
 type HAPManager struct {
 	bridge          *accessory.Bridge
 	accessories     map[string]Switchable
+	accessoryOrder  []string
 	commands        chan plugs.CommandEvent
 	plugManager     *plugs.Manager
 	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
@@ -113,6 +114,7 @@ func NewHAPManager(
 	hm := &HAPManager{
 		bridge:          bridge,
 		accessories:     make(map[string]Switchable),
+		accessoryOrder:  make([]string, 0, len(plugConfigs)),
 		commands:        commands,
 		plugManager:     plugManager,
 		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
@@ -174,6 +176,7 @@ func NewHAPManager(
 		})
 
 		hm.accessories[plug.ID] = switchable
+		hm.accessoryOrder = append(hm.accessoryOrder, plug.ID)
 
 		// Add accessory to bridge
 		// Note: We need to access the underlying accessory.A to add it to the bridge
@@ -195,7 +198,11 @@ func (hm *HAPManager) GetAccessories() []*accessory.A {
 	// Collect all accessories
 	var accessories []*accessory.A
 	accessories = append(accessories, hm.bridge.A) // Add the bridge itself
-	for _, acc := range hm.accessories {
+	for _, plugID := range hm.accessoryOrder {
+		acc, ok := hm.accessories[plugID]
+		if !ok {
+			continue
+		}
 		switch a := acc.(type) {
 		case *OutletWrapper:
 			accessories = append(accessories, a.A)
