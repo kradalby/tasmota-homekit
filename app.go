@@ -352,7 +352,7 @@ func Main() {
 	kraWeb.Handle("/health", http.HandlerFunc(webServer.HandleHealth))
 	kraWeb.Handle("/qrcode", http.HandlerFunc(webServer.HandleQRCode))
 	kraWeb.Handle("/debug/eventbus", http.HandlerFunc(webServer.HandleEventBusDebug))
-	kraWeb.Handle("/debug/hap", NewDebugHandler(webServer.hapManager))
+	kraWeb.Handle("/debug/hap", NewDebugHandler(hapManager))
 
 	webURL := fmt.Sprintf("http://%s", cfg.WebAddrPort().String())
 	if enableTailscale {
