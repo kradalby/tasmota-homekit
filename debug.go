@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/brutella/hap"
@@ -120,19 +121,7 @@ func (hm *HAPManager) DebugInfo() HAPDebugInfo {
 	}
 
 	// Accessories
-	var accessories []*accessory.A
-	accessories = append(accessories, hm.bridge.A)
-
-	for _, acc := range hm.accessories {
-		switch a := acc.(type) {
-		case *OutletWrapper:
-			accessories = append(accessories, a.A)
-		case *LightbulbWrapper:
-			accessories = append(accessories, a.A)
-		}
-	}
-
-	for _, acc := range accessories {
+	for _, acc := range hm.GetAccessories() {
 		accType := "Unknown"
 		switch acc.Type {
 		case accessory.TypeBridge:
@@ -153,6 +142,30 @@ func (hm *HAPManager) DebugInfo() HAPDebugInfo {
 			Firmware:     acc.Info.FirmwareRevision.Value(),
 		})
 	}
+
+	sort.Slice(info.Accessories, func(i, j int) bool {
+		type order int
+		orderFor := func(accType string) order {
+			switch accType {
+			case "Bridge":
+				return 0
+			case "Outlet":
+				return 1
+			case "Lightbulb":
+				return 2
+			default:
+				return 3
+			}
+		}
+
+		orderI := orderFor(info.Accessories[i].Type)
+		orderJ := orderFor(info.Accessories[j].Type)
+		if orderI != orderJ {
+			return orderI < orderJ
+		}
+
+		return info.Accessories[i].Name < info.Accessories[j].Name
+	})
 
 	return info
 }

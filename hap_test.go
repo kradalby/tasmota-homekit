@@ -94,6 +94,37 @@ func TestHAPManagerExposesAccessories(t *testing.T) {
 	}
 }
 
+func TestHAPManagerAccessoryOrderStable(t *testing.T) {
+	plugCfg := []plugs.Plug{
+		{ID: "plug-1", Name: "First Plug", Address: "1.2.3.4"},
+		{ID: "plug-2", Name: "Second Plug", Address: "1.2.3.5"},
+		{ID: "plug-3", Name: "Third Plug", Address: "1.2.3.6"},
+	}
+
+	newManager := func() *HAPManager {
+		commands := make(chan plugs.CommandEvent, 1)
+		eventBus := newTestEventsBus(t)
+		return NewHAPManager(plugCfg, commands, nil, eventBus)
+	}
+
+	hm1 := newManager()
+	hm2 := newManager()
+
+	acc1 := hm1.GetAccessories()
+	acc2 := hm2.GetAccessories()
+
+	require.Len(t, acc1, len(plugCfg)+1)
+	require.Len(t, acc2, len(plugCfg)+1)
+
+	for i, plug := range plugCfg {
+		accessoryIndex := i + 1 // Skip bridge at index 0
+		require.Equal(t, plug.Name, acc1[accessoryIndex].Info.Name.Value())
+		require.Equal(t, plug.Name, acc2[accessoryIndex].Info.Name.Value())
+		require.Equal(t, acc1[accessoryIndex].Id, acc2[accessoryIndex].Id, "accessory IDs must remain stable")
+		require.Equal(t, hashString(plug.ID), acc1[accessoryIndex].Id, "hash mismatch for plug %s", plug.ID)
+	}
+}
+
 func TestHAPManagerPublishesCommandEvents(t *testing.T) {
 	plugCfg := []plugs.Plug{{
 		ID:      "plug-1",
