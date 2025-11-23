@@ -1,4 +1,4 @@
-# AGENTS NOTES – `tasmota-nefit` (Tasmota HomeKit)
+# AGENTS NOTES – `tasmota-homekit` (Tasmota HomeKit)
 
 ## Working Rules
 

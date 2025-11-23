@@ -1,4 +1,4 @@
-module github.com/kradalby/tasmota-nefit
+module github.com/kradalby/tasmota-homekit
 
 go 1.25.3
 
@@ -7,7 +7,7 @@ require (
 	github.com/brutella/hap v0.0.35
 	github.com/chasefleming/elem-go v0.31.0
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
-	github.com/kradalby/kra v0.0.0-20251118061446-1bdf827f4a64
+	github.com/kradalby/kra v0.0.0-20251123203901-fcb00e81f17f
 	github.com/kradalby/tasmota-go v0.0.0-20251116164226-730998c7bd0d
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/prometheus/client_golang v1.23.2

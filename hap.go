@@ -9,8 +9,8 @@ import (
 
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
-	"github.com/kradalby/tasmota-nefit/events"
-	"github.com/kradalby/tasmota-nefit/plugs"
+	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/plugs"
 	"tailscale.com/util/eventbus"
 )
 

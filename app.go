@@ -14,11 +14,11 @@ import (
 
 	homekitqr "github.com/kradalby/homekit-qr"
 	"github.com/kradalby/kra/web"
-	appconfig "github.com/kradalby/tasmota-nefit/config"
-	"github.com/kradalby/tasmota-nefit/events"
-	"github.com/kradalby/tasmota-nefit/logging"
-	"github.com/kradalby/tasmota-nefit/metrics"
-	"github.com/kradalby/tasmota-nefit/plugs"
+	appconfig "github.com/kradalby/tasmota-homekit/config"
+	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/logging"
+	"github.com/kradalby/tasmota-homekit/metrics"
+	"github.com/kradalby/tasmota-homekit/plugs"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
@@ -325,6 +325,7 @@ func Main() {
 	kraOpts := []web.Option{
 		web.WithStdLogger(log.New(os.Stdout, "kraweb: ", log.LstdFlags)),
 		web.WithLogger(logger),
+		web.WithTailscaleStateDir(cfg.TailscaleStateDir),
 	}
 
 	enableTailscale := cfg.TailscaleAuthKey != ""
@@ -333,7 +334,6 @@ func Main() {
 		LocalAddr:       cfg.WebAddrPort().String(),
 		AuthKey:         cfg.TailscaleAuthKey,
 		EnableTailscale: enableTailscale,
-		TailscaleDir:    cfg.TailscaleStateDir,
 	}
 
 	kraWeb, err := web.NewServer(kraConfig, kraOpts...)
