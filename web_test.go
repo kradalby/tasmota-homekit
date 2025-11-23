@@ -105,6 +105,7 @@ func newTestWebServer(t *testing.T) (*WebServer, *fakePlugProvider, *mockPlugCon
 		nil,
 		"00102003",
 		"QR",
+		nil,
 	)
 
 	t.Cleanup(func() {

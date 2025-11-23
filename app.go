@@ -233,8 +233,9 @@ func Main() {
 		os.Exit(1)
 	}
 
+	fsStore := hap.NewFsStore(cfg.HAPStoragePath)
 	hapServer, err := hap.NewServer(
-		hap.NewFsStore(cfg.HAPStoragePath),
+		fsStore,
 		accessories[0],
 		accessories[1:]...,
 	)
@@ -245,6 +246,9 @@ func Main() {
 
 	hapServer.Pin = cfg.HAPPin
 	hapServer.Addr = cfg.HAPAddrPort().String()
+
+	hapManager.SetServer(hapServer)
+	hapManager.SetStore(fsStore)
 
 	hapStatusClient, err := eventBus.Client(events.ClientHAP)
 	if err != nil {
@@ -337,7 +341,7 @@ func Main() {
 		os.Exit(1)
 	}
 
-	webServer := NewWebServer(logger, plugManager, plugManager, eventBus, kraWeb, cfg.HAPPin, qrCode)
+	webServer := NewWebServer(logger, plugManager, plugManager, eventBus, kraWeb, cfg.HAPPin, qrCode, hapManager)
 	webServer.LogEvent("Server starting...")
 	webServer.Start(ctx)
 	defer webServer.Close()
@@ -348,6 +352,7 @@ func Main() {
 	kraWeb.Handle("/health", http.HandlerFunc(webServer.HandleHealth))
 	kraWeb.Handle("/qrcode", http.HandlerFunc(webServer.HandleQRCode))
 	kraWeb.Handle("/debug/eventbus", http.HandlerFunc(webServer.HandleEventBusDebug))
+	kraWeb.Handle("/debug/hap", NewDebugHandler(webServer.hapManager))
 
 	webURL := fmt.Sprintf("http://%s", cfg.WebAddrPort().String())
 	if enableTailscale {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"hash/fnv"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
+	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
 	"github.com/kradalby/tasmota-nefit/events"
 	"github.com/kradalby/tasmota-nefit/plugs"
@@ -23,6 +25,7 @@ type Switchable interface {
 	SetOn(on bool)
 	OnValue() bool
 	OnValueRemoteUpdate(f func(on bool))
+	ID() uint64
 }
 
 // OutletWrapper wraps an accessory.Outlet to implement Switchable
@@ -42,6 +45,10 @@ func (w *OutletWrapper) OnValueRemoteUpdate(f func(on bool)) {
 	w.Outlet.Outlet.On.OnValueRemoteUpdate(f)
 }
 
+func (w *OutletWrapper) ID() uint64 {
+	return w.Id
+}
+
 // LightbulbWrapper wraps an accessory.Lightbulb to implement Switchable
 type LightbulbWrapper struct {
 	*accessory.Lightbulb
@@ -59,6 +66,10 @@ func (w *LightbulbWrapper) OnValueRemoteUpdate(f func(on bool)) {
 	w.Lightbulb.Lightbulb.On.OnValueRemoteUpdate(f)
 }
 
+func (w *LightbulbWrapper) ID() uint64 {
+	return w.Id
+}
+
 // HAPManager manages HomeKit accessories and their state synchronization
 type HAPManager struct {
 	bridge          *accessory.Bridge
@@ -68,6 +79,15 @@ type HAPManager struct {
 	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
 	eventBus        *events.Bus
 	eventClient     *eventbus.Client
+
+	// Runtime info
+	server *hap.Server
+	store  hap.Store
+
+	// Stats
+	incomingCommands atomic.Uint64
+	outgoingUpdates  atomic.Uint64
+	lastActivity     atomic.Int64 // Unix timestamp
 }
 
 // NewHAPManager creates a new HAP manager with accessories for all plugs
@@ -141,6 +161,9 @@ func NewHAPManager(
 		switchable.OnValueRemoteUpdate(func(on bool) {
 			slog.Info("HomeKit command received", "plug_id", plugID, "on", on)
 
+			hm.incomingCommands.Add(1)
+			hm.lastActivity.Store(time.Now().Unix())
+
 			// Send command through event channel
 			commands <- plugs.CommandEvent{
 				PlugID: plugID,
@@ -195,9 +218,13 @@ func (hm *HAPManager) UpdateState(plugID string, state plugs.State) {
 	// Update HomeKit state
 	acc.SetOn(state.On)
 
+	hm.outgoingUpdates.Add(1)
+	hm.lastActivity.Store(time.Now().Unix())
+
 	slog.Debug("Updated HomeKit state",
 		"plug_id", plugID,
 		"on", state.On,
+		"accessory_id", acc.ID(),
 	)
 }
 
@@ -212,10 +239,19 @@ func (hm *HAPManager) Close() {
 	hm.stateSubscriber.Close()
 }
 
+func (hm *HAPManager) SetServer(s *hap.Server) {
+	hm.server = s
+}
+
+func (hm *HAPManager) SetStore(s hap.Store) {
+	hm.store = s
+}
+
 func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 	for {
 		select {
 		case event := <-hm.stateSubscriber.Events():
+			slog.Debug("Received state change event", "plug_id", event.PlugID, "on", event.State.On)
 			hm.UpdateState(event.PlugID, event.State)
 		case <-ctx.Done():
 			return
@@ -236,4 +272,5 @@ func (hm *HAPManager) publishCommand(plugID string, on bool) {
 		CommandType: events.CommandTypeSetPower,
 		On:          &desiredState,
 	})
+	slog.Debug("Published command to eventbus", "plug_id", plugID, "on", on)
 }
