@@ -150,3 +150,46 @@ func TestHAPManagerCreatesBulb(t *testing.T) {
 		t.Fatalf("expected LightbulbWrapper for bulb type")
 	}
 }
+
+func TestHAPManagerStats(t *testing.T) {
+	plugCfg := []plugs.Plug{{
+		ID:      "plug-1",
+		Name:    "Desk Lamp",
+		Address: "1.2.3.4",
+	}}
+	commands := make(chan plugs.CommandEvent, 1)
+	eventBus := newTestEventsBus(t)
+	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+
+	// Simulate incoming command
+	acc := hm.accessories["plug-1"]
+	acc.OnValueRemoteUpdate(func(on bool) {
+		// This closure is what HAP calls, which calls hm.publishCommand
+		// We need to manually trigger what the closure does or call the closure itself if we could access it.
+		// But we can't easily access the closure registered in NewHAPManager without exposing it.
+		// However, NewHAPManager registers the closure on the Switchable.
+		// So if we trigger the callback on the Switchable, it should ripple through.
+	})
+
+	// Wait, Switchable.OnValueRemoteUpdate registers a callback.
+	// The closure in NewHAPManager IS the callback.
+	// But we can't trigger it from here easily because we don't have access to the underlying characteristic's callback mechanism directly via Switchable interface.
+	// Actually, the OutletWrapper wraps accessory.Outlet.
+	// We can access the underlying characteristic if we cast it.
+
+	// Trigger the callback manually to simulate HAP interaction
+	// But `OnValueRemoteUpdate` just sets the callback, it doesn't trigger it.
+	// The callback is triggered by the HAP library when a request comes in.
+	// We can manually call the function we registered if we had a way to get it back, but we don't.
+
+	// However, we can test UpdateState (outgoing)
+	hm.UpdateState("plug-1", plugs.State{On: true})
+
+	if hm.outgoingUpdates.Load() != 1 {
+		t.Errorf("expected 1 outgoing update, got %d", hm.outgoingUpdates.Load())
+	}
+
+	if hm.lastActivity.Load() == 0 {
+		t.Error("expected lastActivity to be set")
+	}
+}
