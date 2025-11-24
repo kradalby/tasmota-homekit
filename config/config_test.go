@@ -95,6 +95,12 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.TailscaleHostname != "tasmota-homekit" {
 		t.Errorf("TailscaleHostname = %s, want tasmota-homekit", cfg.TailscaleHostname)
 	}
+	if cfg.BridgeName != "tasmota-homekit" {
+		t.Errorf("BridgeName = %s, want tasmota-homekit", cfg.BridgeName)
+	}
+	if cfg.BridgeName != cfg.TailscaleHostname {
+		t.Errorf("BridgeName and TailscaleHostname should match by default")
+	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
@@ -103,6 +109,58 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.PlugsConfigPath != "./plugs.hujson" {
 		t.Errorf("PlugsConfigPath = %s, want ./plugs.hujson", cfg.PlugsConfigPath)
+	}
+}
+
+func TestBridgeNameFollowsTailscaleOverride(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TASMOTA_HOMEKIT_TS_HOSTNAME", "custom-hub")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.TailscaleHostname != "custom-hub" {
+		t.Errorf("TailscaleHostname = %s, want custom-hub", cfg.TailscaleHostname)
+	}
+	if cfg.BridgeName != "custom-hub" {
+		t.Errorf("BridgeName = %s, want custom-hub", cfg.BridgeName)
+	}
+}
+
+func TestTailscaleNameFollowsBridgeOverride(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TASMOTA_HOMEKIT_BRIDGE_NAME", "custom-bridge")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.BridgeName != "custom-bridge" {
+		t.Errorf("BridgeName = %s, want custom-bridge", cfg.BridgeName)
+	}
+	if cfg.TailscaleHostname != "custom-bridge" {
+		t.Errorf("TailscaleHostname = %s, want custom-bridge", cfg.TailscaleHostname)
+	}
+}
+
+func TestNameOverridesRemainIndependentWhenBothSet(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TASMOTA_HOMEKIT_BRIDGE_NAME", "custom-bridge")
+	t.Setenv("TASMOTA_HOMEKIT_TS_HOSTNAME", "custom-ts")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.BridgeName != "custom-bridge" {
+		t.Errorf("BridgeName = %s, want custom-bridge", cfg.BridgeName)
+	}
+	if cfg.TailscaleHostname != "custom-ts" {
+		t.Errorf("TailscaleHostname = %s, want custom-ts", cfg.TailscaleHostname)
 	}
 }
 

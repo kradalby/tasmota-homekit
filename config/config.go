@@ -14,6 +14,7 @@ const (
 	defaultWebPort       = 8081
 	defaultMQTTPort      = 1883
 	defaultMQTTBindLocal = "0.0.0.0"
+	defaultBridgeName    = "tasmota-homekit"
 )
 
 // Config holds all environment-driven configuration.
@@ -36,7 +37,8 @@ type Config struct {
 	MQTTPort        int    `env:"TASMOTA_HOMEKIT_MQTT_PORT,default=1883"`
 
 	// Tailscale configuration
-	TailscaleHostname string `env:"TASMOTA_HOMEKIT_TS_HOSTNAME,default=tasmota-homekit"`
+	BridgeName        string `env:"TASMOTA_HOMEKIT_BRIDGE_NAME"`
+	TailscaleHostname string `env:"TASMOTA_HOMEKIT_TS_HOSTNAME"`
 	TailscaleAuthKey  string `env:"TASMOTA_HOMEKIT_TS_AUTHKEY"`
 	TailscaleStateDir string `env:"TASMOTA_HOMEKIT_TS_STATE_DIR,default=./data/tailscale"`
 
@@ -59,6 +61,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse environment variables: %w", err)
 	}
 
+	cfg.applyNameDefaults()
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -70,6 +74,9 @@ func Load() (*Config, error) {
 func (c *Config) Validate() error {
 	if len(c.HAPPin) != 8 {
 		return fmt.Errorf("HAP PIN must be exactly 8 digits")
+	}
+	if c.BridgeName == "" {
+		return fmt.Errorf("BridgeName cannot be empty")
 	}
 	if err := c.parseListenerAddrs(); err != nil {
 		return err
@@ -173,6 +180,34 @@ func (c *Config) ensureParsed() {
 		if err := c.parseListenerAddrs(); err != nil {
 			panic(fmt.Sprintf("failed to parse listener addresses: %v", err))
 		}
+	}
+}
+
+func (c *Config) applyNameDefaults() {
+	tsHostnameSet := envVarSet("TASMOTA_HOMEKIT_TS_HOSTNAME")
+	bridgeNameSet := envVarSet("TASMOTA_HOMEKIT_BRIDGE_NAME")
+
+	base := defaultBridgeName
+	switch {
+	case tsHostnameSet:
+		base = c.TailscaleHostname
+	case bridgeNameSet:
+		base = c.BridgeName
+	case c.TailscaleHostname != "":
+		base = c.TailscaleHostname
+	case c.BridgeName != "":
+		base = c.BridgeName
+	}
+
+	if !tsHostnameSet {
+		if c.TailscaleHostname == "" {
+			c.TailscaleHostname = base
+		} else {
+			base = c.TailscaleHostname
+		}
+	}
+	if !bridgeNameSet {
+		c.BridgeName = base
 	}
 }
 

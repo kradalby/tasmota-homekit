@@ -33,7 +33,7 @@ func TestHAPManagerUpdateState(t *testing.T) {
 
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
 	}
@@ -53,7 +53,7 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 	}}
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -82,7 +82,7 @@ func TestHAPManagerExposesAccessories(t *testing.T) {
 	}}
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 
 	acc := hm.GetAccessories()
 	if len(acc) != 2 {
@@ -104,7 +104,7 @@ func TestHAPManagerAccessoryOrderStable(t *testing.T) {
 	newManager := func() *HAPManager {
 		commands := make(chan plugs.CommandEvent, 1)
 		eventBus := newTestEventsBus(t)
-		return NewHAPManager(plugCfg, commands, nil, eventBus)
+		return NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 	}
 
 	hm1 := newManager()
@@ -133,7 +133,7 @@ func TestHAPManagerPublishesCommandEvents(t *testing.T) {
 	}}
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 
 	client, err := eventBus.Client(events.ClientHAP)
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestHAPManagerCreatesBulb(t *testing.T) {
 
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
@@ -190,7 +190,7 @@ func TestHAPManagerStats(t *testing.T) {
 	}}
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
 
 	// Simulate incoming command
 	acc := hm.accessories["plug-1"]

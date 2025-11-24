@@ -74,6 +74,8 @@ Copy `.env.example` to `.env` and configure:
 ```bash
 TASMOTA_HOMEKIT_HAP_PIN=12345678
 TASMOTA_HOMEKIT_HAP_ADDR=0.0.0.0:8080
+TASMOTA_HOMEKIT_BRIDGE_NAME=tasmota-homekit-dev
+TASMOTA_HOMEKIT_TS_HOSTNAME=tasmota-homekit-dev
 TASMOTA_HOMEKIT_PLUGS_CONFIG=./plugs.hujson
 ```
 
@@ -93,7 +95,7 @@ The embedded kra web server exposes a consistent set of endpoints (locally and o
 - `/qrcode` – Plain-text QR/PIN output for headless setups.
 - `/debug/eventbus` – Diagnostics page mirroring `nefit-homekit` (live state + SSE client count).
 
-Set `TASMOTA_HOMEKIT_TS_AUTHKEY` and `TASMOTA_HOMEKIT_TS_HOSTNAME` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed. `TASMOTA_HOMEKIT_TS_STATE_DIR` controls where the embedded tsnet instance stores its state (defaults to `./data/tailscale` and maps to `dataDir/tailscale` when using the NixOS module).
+Set `TASMOTA_HOMEKIT_BRIDGE_NAME` (and optionally `TASMOTA_HOMEKIT_TS_HOSTNAME`) if you want a custom HomeKit/Tailscale identity. By default, both names stay in sync and use `tasmota-homekit`. Provide `TASMOTA_HOMEKIT_TS_AUTHKEY` to enable Tailscale; kra handles the auth-key lifecycle, so no temp files are needed. `TASMOTA_HOMEKIT_TS_STATE_DIR` controls where the embedded tsnet instance stores its state (defaults to `./data/tailscale` and maps to `dataDir/tailscale` when using the NixOS module).
 
 ## NixOS Deployment
 
@@ -216,6 +218,7 @@ services.tasmota-homekit.bindAddresses.mqtt # IP for MQTT listener (default 0.0.
 services.tasmota-homekit.dataDir            # Base directory for persistent data (contains hap + tailscale)
 services.tasmota-homekit.hap.pin            # HomeKit PIN (8 digits)
 services.tasmota-homekit.plugsConfig        # HuJSON description of plugs
+services.tasmota-homekit.bridgeName         # Override HomeKit bridge name (defaults to TS hostname)
 services.tasmota-homekit.log.level          # slog level (debug/info/warn/error)
 services.tasmota-homekit.log.format         # slog format (json/console)
 services.tasmota-homekit.tailscale.hostname # Tailnet hostname
