@@ -35,6 +35,16 @@ in
       description = "Additional environment variables to pass to the service.";
     };
 
+    bridgeName = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Override the HomeKit bridge name. Defaults to the Tailscale hostname
+        (or "tasmota-homekit") when unset.
+      '';
+      example = "tasmota-homekit-dev";
+    };
+
     user = mkOption {
       type = types.str;
       default = "tasmota-homekit";
@@ -197,7 +207,11 @@ in
             TASMOTA_HOMEKIT_LOG_FORMAT = cfg.log.format;
             TASMOTA_HOMEKIT_TS_HOSTNAME = cfg.tailscale.hostname;
             TASMOTA_HOMEKIT_TS_STATE_DIR = tailscaleDir;
-          } // cfg.environment;
+          }
+          // (optionalAttrs (cfg.bridgeName != null) {
+            TASMOTA_HOMEKIT_BRIDGE_NAME = cfg.bridgeName;
+          })
+          // cfg.environment;
 
           tailscaleExport =
             optionalString (cfg.tailscale.authKeyFile != null) ''

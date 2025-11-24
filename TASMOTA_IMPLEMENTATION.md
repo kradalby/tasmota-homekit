@@ -29,7 +29,7 @@ The runtime keeps parity with `nefit-homekit`: a single eventbus fans state out 
 - Required: `TASMOTA_HOMEKIT_PLUGS_CONFIG` (HuJSON path) and HAP secrets (`TASMOTA_HOMEKIT_HAP_PIN`, optional `TASMOTA_HOMEKIT_HAP_STORAGE_PATH`).
 - Listeners: prefer `TASMOTA_HOMEKIT_HAP_ADDR`, `TASMOTA_HOMEKIT_WEB_ADDR`, and `TASMOTA_HOMEKIT_MQTT_ADDR` (Go-style `addr:port`). When omitted, the runtime combines `TASMOTA_HOMEKIT_*_BIND_ADDRESS` (defaults `0.0.0.0`) with `TASMOTA_HOMEKIT_*_PORT` (defaults `8080/8081/1883`).
 - Logging: `TASMOTA_HOMEKIT_LOG_LEVEL`, `TASMOTA_HOMEKIT_LOG_FORMAT`.
-- Tailscale: `TASMOTA_HOMEKIT_TS_HOSTNAME`, `TASMOTA_HOMEKIT_TS_AUTHKEY`, `TASMOTA_HOMEKIT_TS_STATE_DIR` (usually injected through the module credential loader, defaulting to `./data/tailscale`).
+- Identity: `TASMOTA_HOMEKIT_BRIDGE_NAME` (defaults to the TS hostname) and Tailscale knobs `TASMOTA_HOMEKIT_TS_HOSTNAME`, `TASMOTA_HOMEKIT_TS_AUTHKEY`, `TASMOTA_HOMEKIT_TS_STATE_DIR` (usually injected through the module credential loader, defaulting to `./data/tailscale`).
 
 Store the environment values in `/etc/tasmota-homekit/env` (or agenix) and reference it via `services.tasmota-homekit.environmentFile`.
 
@@ -48,6 +48,7 @@ Store the environment values in `/etc/tasmota-homekit/env` (or agenix) and refer
 - `services.tasmota-homekit.{dataDir}` and `hap.pin`.
 - `services.tasmota-homekit.plugsConfig`.
 - `services.tasmota-homekit.log.{level,format}`.
+- `services.tasmota-homekit.{bridgeName}`.
 - `services.tasmota-homekit.tailscale.{hostname,authKeyFile}`.
 - `services.tasmota-homekit.openFirewall`, `.user`, `.group`.
 

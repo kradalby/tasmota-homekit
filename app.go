@@ -223,7 +223,7 @@ func Main() {
 	go plugManager.MonitorConnections(ctx, localIP, int(cfg.MQTTAddrPort().Port()))
 	slog.Info("Connection monitoring started")
 
-	hapManager := NewHAPManager(plugCfg.Plugs, commands, plugManager, eventBus)
+	hapManager := NewHAPManager(plugCfg.Plugs, cfg.BridgeName, commands, plugManager, eventBus)
 	hapManager.Start(ctx)
 	defer hapManager.Close()
 

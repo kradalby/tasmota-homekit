@@ -94,6 +94,7 @@ type HAPManager struct {
 // NewHAPManager creates a new HAP manager with accessories for all plugs
 func NewHAPManager(
 	plugConfigs []plugs.Plug,
+	bridgeName string,
 	commands chan plugs.CommandEvent,
 	plugManager *plugs.Manager,
 	bus *events.Bus,
@@ -105,7 +106,7 @@ func NewHAPManager(
 
 	// Create bridge accessory
 	bridge := accessory.NewBridge(accessory.Info{
-		Name:         "Tasmota Bridge",
+		Name:         bridgeName,
 		Manufacturer: "Tasmota HomeKit",
 		Model:        "Bridge",
 		SerialNumber: "TB001",
