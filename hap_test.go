@@ -38,7 +38,10 @@ func TestHAPManagerUpdateState(t *testing.T) {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
 	}
 
-	hm.UpdateState("plug-1", plugs.State{On: true})
+	hm.UpdateState(events.StateUpdateEvent{
+		PlugID: "plug-1",
+		On:     true,
+	})
 
 	if !hm.accessories["plug-1"].OnValue() {
 		t.Fatalf("expected outlet to be ON")
@@ -61,12 +64,9 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 
 	client, err := eventBus.Client(events.ClientPlugManager)
 	require.NoError(t, err)
-	pub := eventbus.Publish[plugs.StateChangedEvent](client)
-	pub.Publish(plugs.StateChangedEvent{
+	eventBus.PublishStateUpdate(client, events.StateUpdateEvent{
 		PlugID: "plug-1",
-		State: plugs.State{
-			On: true,
-		},
+		On:     true,
 	})
 
 	assert.EventuallyWithT(t, func(c *assert.CollectT) {
@@ -214,7 +214,10 @@ func TestHAPManagerStats(t *testing.T) {
 	// We can manually call the function we registered if we had a way to get it back, but we don't.
 
 	// However, we can test UpdateState (outgoing)
-	hm.UpdateState("plug-1", plugs.State{On: true})
+	hm.UpdateState(events.StateUpdateEvent{
+		PlugID: "plug-1",
+		On:     true,
+	})
 
 	if hm.outgoingUpdates.Load() != 1 {
 		t.Errorf("expected 1 outgoing update, got %d", hm.outgoingUpdates.Load())
