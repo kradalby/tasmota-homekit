@@ -29,10 +29,11 @@ type Manager struct {
 // Info holds the client and configuration for a plug.
 type Info struct {
 	Config Plug
-	Client client
+	Client Client
 }
 
-type client interface {
+// Client is the interface for communicating with a Tasmota device.
+type Client interface {
 	ExecuteCommand(context.Context, string) ([]byte, error)
 	ExecuteBacklog(context.Context, ...string) ([]byte, error)
 }
@@ -160,26 +161,13 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		return err
 	}
 
-	pm.mu.Lock()
-	state = pm.states[plugID]
-	state.On = on
-	state.LastUpdated = time.Now()
-	stateCopy := *state
-	pm.mu.Unlock()
-
-	pm.statePublisher.Publish(StateChangedEvent{
-		PlugID: plugID,
-		State:  stateCopy,
-	})
-	pm.publishStateUpdate("command", plugID, stateCopy)
-
-	// Trigger a status refresh after a short delay to capture power usage changes
-	go func() {
-		time.Sleep(2 * time.Second)
-		if _, err := pm.GetStatus(context.Background(), plugID); err != nil {
-			slog.Debug("Failed to refresh status after toggle", "plug_id", plugID, "error", err)
-		}
-	}()
+	// Immediately query status to get actual device state
+	// This replaces the optimistic update and ensures we only publish confirmed state
+	if _, err := pm.GetStatus(ctx, plugID); err != nil {
+		slog.Debug("Failed to get status after power command", "plug_id", plugID, "error", err)
+		// Even if status query fails, the command likely succeeded
+		// MQTT will report the state change shortly
+	}
 
 	return nil
 }
@@ -547,5 +535,14 @@ func connectionStatus(lastSeen time.Time) (string, string) {
 		return "stale", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
 	default:
 		return "disconnected", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	}
+}
+
+// SetClientForTesting replaces the client for a plug (for testing only).
+func (pm *Manager) SetClientForTesting(plugID string, c Client) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if info, ok := pm.plugs[plugID]; ok {
+		info.Client = c
 	}
 }

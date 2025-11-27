@@ -77,7 +77,7 @@ type HAPManager struct {
 	accessoryOrder  []string
 	commands        chan plugs.CommandEvent
 	plugManager     *plugs.Manager
-	stateSubscriber *eventbus.Subscriber[plugs.StateChangedEvent]
+	stateSubscriber *eventbus.Subscriber[events.StateUpdateEvent]
 	eventBus        *events.Bus
 	eventClient     *eventbus.Client
 
@@ -118,7 +118,7 @@ func NewHAPManager(
 		accessoryOrder:  make([]string, 0, len(plugConfigs)),
 		commands:        commands,
 		plugManager:     plugManager,
-		stateSubscriber: eventbus.Subscribe[plugs.StateChangedEvent](client),
+		stateSubscriber: eventbus.Subscribe[events.StateUpdateEvent](client),
 		eventBus:        bus,
 		eventClient:     client,
 	}
@@ -216,22 +216,22 @@ func (hm *HAPManager) GetAccessories() []*accessory.A {
 }
 
 // UpdateState updates the HomeKit state for a plug
-func (hm *HAPManager) UpdateState(plugID string, state plugs.State) {
-	acc, exists := hm.accessories[plugID]
+func (hm *HAPManager) UpdateState(event events.StateUpdateEvent) {
+	acc, exists := hm.accessories[event.PlugID]
 	if !exists {
-		slog.Warn("Accessory not found for plug", "plug_id", plugID)
+		slog.Warn("Accessory not found for plug", "plug_id", event.PlugID)
 		return
 	}
 
 	// Update HomeKit state
-	acc.SetOn(state.On)
+	acc.SetOn(event.On)
 
 	hm.outgoingUpdates.Add(1)
 	hm.lastActivity.Store(time.Now().Unix())
 
 	slog.Debug("Updated HomeKit state",
-		"plug_id", plugID,
-		"on", state.On,
+		"plug_id", event.PlugID,
+		"on", event.On,
 		"accessory_id", acc.ID(),
 	)
 }
@@ -259,8 +259,8 @@ func (hm *HAPManager) ProcessStateChanges(ctx context.Context) {
 	for {
 		select {
 		case event := <-hm.stateSubscriber.Events():
-			slog.Debug("Received state change event", "plug_id", event.PlugID, "on", event.State.On)
-			hm.UpdateState(event.PlugID, event.State)
+			slog.Debug("Received state update event", "plug_id", event.PlugID, "on", event.On)
+			hm.UpdateState(event)
 		case <-ctx.Done():
 			return
 		}

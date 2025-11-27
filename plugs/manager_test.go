@@ -27,7 +27,8 @@ func (f *fakeClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, erro
 		f.responses = f.responses[1:]
 		return resp, nil
 	}
-	return []byte(`{"Status":{"Power":"ON"}}`), nil
+	// Default response for Status 0 command - matches real Tasmota format
+	return []byte(`{"StatusSTS":{"POWER":"ON"}}`), nil
 }
 
 func (f *fakeClient) ExecuteBacklog(_ context.Context, cmds ...string) ([]byte, error) {
@@ -67,7 +68,9 @@ func TestSetPowerUpdatesState(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, pm.SetPower(ctx, "plug-1", true))
 
-	require.Equal(t, "Power ON", fake.lastCmd)
+	// SetPower now calls GetStatus immediately after sending the power command
+	// So the last command should be "Status 0"
+	require.Equal(t, "Status 0", fake.lastCmd)
 
 	state, ok := pm.states["plug-1"]
 	require.True(t, ok)
