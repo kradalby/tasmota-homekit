@@ -51,7 +51,7 @@
 
             src = ./.;
             subPackages = [ "./cmd/tasmota-homekit" ];
-            vendorHash = "sha256-vQsFpW649FfVK7GPQjq4xUWS5U4ncEdOBHiO0q4xzEw=";
+            vendorHash = "sha256-/b99h4xRXIKzVeL3BI8kb86czmNQUe2Cnjd3UdePBtM=";
 
             ldflags = [
               "-s"

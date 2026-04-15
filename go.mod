@@ -59,7 +59,7 @@ require (
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/mdlayher/netlink v1.11.0 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
-	github.com/miekg/dns v1.1.68 // indirect
+	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pires/go-proxyproto v0.12.0 // indirect
