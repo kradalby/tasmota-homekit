@@ -34,6 +34,7 @@ result-*
 # IDE and Editor files
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -48,6 +49,7 @@ hap/
 *.hap/
 data/
 *.db
+test-store/
 
 # Configuration files with potential secrets
 *.env
