@@ -13,11 +13,11 @@
           pkgs = import nixpkgs { inherit system; };
           lib = pkgs.lib;
 
-          # Use Go 1.25 to satisfy go.mod requirement of 1.25.3
-          go = pkgs.go_1_25;
+          # Use Go 1.26 (required by tailscale v1.96.x)
+          go = pkgs.go_1_26;
 
-          # Override buildGoModule to use go_1_25
-          buildGoModule = pkgs.buildGoModule.override { go = pkgs.go_1_25; };
+          # Override buildGoModule to use go_1_26
+          buildGoModule = pkgs.buildGoModule.override { go = pkgs.go_1_26; };
 
         in
         {
@@ -51,7 +51,7 @@
 
             src = ./.;
             subPackages = [ "./cmd/tasmota-homekit" ];
-            vendorHash = "sha256-zKzjMBE+V1IS+v/k7K9kfzYn+jcktiyrY8rV1Okuynw=";
+            vendorHash = "sha256-vQsFpW649FfVK7GPQjq4xUWS5U4ncEdOBHiO0q4xzEw=";
 
             ldflags = [
               "-s"
