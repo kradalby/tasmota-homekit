@@ -2,7 +2,7 @@
   description = "Tasmota HomeKit Bridge - Control Tasmota plugs via HomeKit";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
