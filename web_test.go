@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -174,11 +175,30 @@ func TestHandleToggleCallsSetPower(t *testing.T) {
 	}
 }
 
+// flushRecorder wraps httptest.ResponseRecorder so the SSE handler can call
+// Flush. httptest.ResponseRecorder is not safe for concurrent use, so a mutex
+// guards writes against the test goroutine reading the body.
 type flushRecorder struct {
 	*httptest.ResponseRecorder
+	mu sync.Mutex
 }
 
-func (f *flushRecorder) Flush() {}
+func (f *flushRecorder) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ResponseRecorder.Write(p)
+}
+
+func (f *flushRecorder) Flush() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+}
+
+func (f *flushRecorder) body() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Body.String()
+}
 
 func TestHandleSSE(t *testing.T) {
 	ws, _, _, bus := newTestWebServer(t)
@@ -188,7 +208,7 @@ func TestHandleSSE(t *testing.T) {
 	ws.Start(ctx)
 
 	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
-	rec := &flushRecorder{httptest.NewRecorder()}
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	done := make(chan struct{})
 	go func() {
@@ -209,7 +229,7 @@ func TestHandleSSE(t *testing.T) {
 	})
 
 	assert.EventuallyWithT(t, func(c *assert.CollectT) {
-		if !strings.Contains(rec.Body.String(), "\"plug_id\":\"plug-1\"") {
+		if !strings.Contains(rec.body(), "\"plug_id\":\"plug-1\"") {
 			assert.Fail(c, "missing SSE event")
 		}
 	}, time.Second, 20*time.Millisecond)
@@ -223,13 +243,13 @@ func TestHandleSSE(t *testing.T) {
 	}
 
 	var lastData string
-	for _, line := range strings.Split(rec.Body.String(), "\n") {
+	for _, line := range strings.Split(rec.body(), "\n") {
 		if strings.HasPrefix(line, "data:") {
 			lastData = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		}
 	}
 	if lastData == "" {
-		t.Fatalf("expected SSE payload, got %q", rec.Body.String())
+		t.Fatalf("expected SSE payload, got %q", rec.body())
 	}
 
 	var evt events.StateUpdateEvent
