@@ -115,9 +115,10 @@ jobs:
         run: |
           cat > test-module.nix <<'EOF'
           { pkgs, ... }: {
-            imports = [ ./flake.nix ];
+            imports = [ ./nix/module.nix ];
             services.tasmota-homekit = {
               enable = true;
+              package = pkgs.hello;
               plugsConfig = pkgs.writeText "plugs.hujson" ''
                 { "plugs": [ { "id": "demo", "name": "Demo", "address": "0.0.0.0" } ] }
               '';
