@@ -10,7 +10,7 @@ This repository uses a single workflow, `.github/workflows/ci.yml`, triggered on
    - Publishes `coverage.out` from the Linux job for inspection.
 
 2. **Lint**
-   - Executes `nix develop --command golangci-lint run ./...`.
+   - Executes `golangci-lint run ./...`.
 
 3. **Build**
    - Matrix over Linux/macOS.
@@ -25,7 +25,11 @@ This repository uses a single workflow, `.github/workflows/ci.yml`, triggered on
 Every job:
 
 - Checks out the repo.
-- Sets `steps.changed-files.outputs.files=true` so the Nix bootstrap steps (`nixbuild/nix-quick-install-action` and `cache-nix-action`) run via a consistent conditional.
+- Installs Nix via `NixOS/nix-installer-action` and warms the Nix store cache via `Mic92/hestia/action`.
+
+A workflow-level default shell (`nix develop --command bash`) runs every step
+inside the flake devShell, so tools are available without a per-step prefix. A
+scheduled `gc.yml` workflow garbage-collects the hestia cache daily.
 
 ## Local Parity
 

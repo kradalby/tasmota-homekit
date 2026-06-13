@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Every `run:` step executes inside `nix develop`, so tools come straight from
+# the flake devShell with no per-step prefix.
+defaults:
+  run:
+    shell: nix develop --command bash -e {0}
+
 jobs:
   tests:
     name: Tests
@@ -14,24 +20,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: nixbuild/nix-quick-install-action@889f3180bb5f064ee9e3201428d04ae9e41d54ad # v31
+      - uses: NixOS/nix-installer-action@main
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - uses: Mic92/hestia/action@main
 
       - name: Run unit tests with coverage
-        run: nix develop --command go test -v -cover -coverprofile=coverage.out ./...
+        run: go test -v -cover -coverprofile=coverage.out ./...
 
       - name: Coverage summary
-        run: nix develop --command go tool cover -func=coverage.out | tail -n 20
+        run: go tool cover -func=coverage.out | tail -n 20
 
       - name: Run race detector
-        run: nix develop --command go test -race ./...
+        run: go test -race ./...
 
       - name: Upload coverage artifact
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-report
           path: coverage.out
@@ -41,14 +47,14 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: nixbuild/nix-quick-install-action@889f3180bb5f064ee9e3201428d04ae9e41d54ad # v31
+      - uses: NixOS/nix-installer-action@main
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - uses: Mic92/hestia/action@main
 
       - name: Run golangci-lint
-        run: nix develop --command golangci-lint run ./...
+        run: golangci-lint run ./...
 
   build:
     name: Build
@@ -57,11 +63,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: nixbuild/nix-quick-install-action@889f3180bb5f064ee9e3201428d04ae9e41d54ad # v31
+      - uses: NixOS/nix-installer-action@main
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - uses: Mic92/hestia/action@main
 
       - name: Build binary with Nix
         run: nix build -L .#tasmota-homekit
@@ -74,7 +80,7 @@ jobs:
 
       - name: Upload Linux artifact
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: tasmota-homekit-linux
           path: result/bin/tasmota-homekit
@@ -84,27 +90,26 @@ jobs:
     name: Flake Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: nixbuild/nix-quick-install-action@889f3180bb5f064ee9e3201428d04ae9e41d54ad # v31
+      - uses: NixOS/nix-installer-action@main
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - uses: Mic92/hestia/action@main
 
       - name: Run nix flake check
         run: nix flake check
         timeout-minutes: 30
 
   nixos-module:
-    if: runner.os == 'Linux'
     name: NixOS Module Smoke Test
     runs-on: ubuntu-latest
     needs: flake-check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: nixbuild/nix-quick-install-action@889f3180bb5f064ee9e3201428d04ae9e41d54ad # v31
+      - uses: NixOS/nix-installer-action@main
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - uses: Mic92/hestia/action@main
 
       - name: Evaluate module import
         run: |
