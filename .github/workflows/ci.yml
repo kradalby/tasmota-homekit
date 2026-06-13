@@ -6,88 +6,13 @@ on:
   pull_request:
     branches: [main]
 
-# Every `run:` step executes inside `nix develop`, so tools come straight from
-# the flake devShell with no per-step prefix.
-defaults:
-  run:
-    shell: nix develop --command bash -e {0}
+# Gate jobs only call `nix build .#checks.<sys>.<name>`, so no `nix develop`
+# default shell is needed. The check logic lives in flake.nix.
+permissions:
+  contents: read
 
 jobs:
-  tests:
-    name: Tests
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-
-      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
-
-      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
-
-      - name: Run unit tests with coverage
-        run: go test -v -cover -coverprofile=coverage.out ./...
-
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -n 20
-
-      - name: Run race detector
-        run: go test -race ./...
-
-      - name: Upload coverage artifact
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage-report
-          path: coverage.out
-          retention-days: 30
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-
-      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
-
-      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
-
-      - name: Run golangci-lint
-        run: golangci-lint run ./...
-
   build:
-    name: Build
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-
-      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
-
-      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
-
-      - name: Build binary with Nix
-        run: nix build -L .#tasmota-homekit
-
-      - name: Show build info
-        run: |
-          file ./result/bin/tasmota-homekit
-          ls -lh ./result/bin/tasmota-homekit
-          ./result/bin/tasmota-homekit --help >/dev/null 2>&1 || true
-
-      - name: Upload Linux artifact
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: tasmota-homekit-linux
-          path: result/bin/tasmota-homekit
-          retention-days: 7
-
-  flake-check:
-    name: Flake Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -96,14 +21,11 @@ jobs:
 
       - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
 
-      - name: Run nix flake check
-        run: nix flake check
-        timeout-minutes: 30
+      - name: build
+        run: nix build -L .#checks.x86_64-linux.build
 
-  nixos-module:
-    name: NixOS Module Smoke Test
+  gotest:
     runs-on: ubuntu-latest
-    needs: flake-check
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -111,29 +33,43 @@ jobs:
 
       - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
 
-      - name: Evaluate module import
-        run: |
-          cat > test-module.nix <<'EOF'
-          { pkgs, ... }: {
-            imports = [ ./nix/module.nix ];
-            services.tasmota-homekit = {
-              enable = true;
-              package = pkgs.hello;
-              plugsConfig = pkgs.writeText "plugs.hujson" ''
-                { "plugs": [ { "id": "demo", "name": "Demo", "address": "0.0.0.0" } ] }
-              '';
-            };
-          }
-          EOF
+      - name: gotest
+        run: nix build -L .#checks.x86_64-linux.gotest
 
-          nix eval --impure --expr '
-            let
-              nixos = import <nixpkgs/nixos> {
-                configuration = { pkgs, ... }: {
-                  imports = [ ./test-module.nix ];
-                  boot.loader.grub.enable = false;
-                  fileSystems."/" = { device = "/dev/null"; };
-                };
-              };
-            in nixos.config.services.tasmota-homekit.enable
-          '
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
+
+      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
+
+      - name: golangci-lint
+        run: nix build -L .#checks.x86_64-linux.golangci-lint
+
+  formatting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
+
+      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
+
+      - name: formatting
+        run: nix build -L .#checks.x86_64-linux.formatting
+
+  # NixOS VM integration test (Linux-only nixosTest, preserved as a flake check).
+  module-test:
+    name: NixOS Module VM Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: NixOS/nix-installer-action@6b8548fe06acfb0155a50ab5d561accb215764cc # main
+
+      - uses: Mic92/hestia/action@ff07bb902a9968ac0c3d0e51d90a606662a375d8 # main
+
+      - name: module-test
+        run: nix build -L .#checks.x86_64-linux.module-test

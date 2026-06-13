@@ -4,20 +4,29 @@
   inputs = {
     nixpkgs.url = "nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    flake-checks.url = "github:kradalby/flake-checks";
+    flake-checks.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, flake-checks }:
     flake-utils.lib.eachDefaultSystem
       (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          lib = pkgs.lib;
 
           # Use Go 1.26 (required by tailscale v1.96.x)
           go = pkgs.go_1_26;
 
-          # Override buildGoModule to use go_1_26
-          buildGoModule = pkgs.buildGoModule.override { go = pkgs.go_1_26; };
+          fc = flake-checks.lib;
+          common = {
+            inherit pkgs;
+            root = ./.;
+            pname = "tasmota-homekit";
+            version = self.rev or "dev";
+            vendorHash = "sha256-/b99h4xRXIKzVeL3BI8kb86czmNQUe2Cnjd3UdePBtM=";
+            goPkg = go;
+            embedDirs = [ ./assets ];
+          };
 
         in
         {
@@ -45,27 +54,9 @@
           };
 
           # Package definition
-          packages.default = buildGoModule {
-            pname = "tasmota-homekit";
-            version = self.rev or "dev";
+          packages.default = fc.goBuild common;
 
-            src = ./.;
-            subPackages = [ "./cmd/tasmota-homekit" ];
-            vendorHash = "sha256-/b99h4xRXIKzVeL3BI8kb86czmNQUe2Cnjd3UdePBtM=";
-
-            ldflags = [
-              "-s"
-              "-w"
-              "-X github.com/kradalby/tasmota-homekit.version=${self.rev or "dev"}"
-            ];
-
-            meta = with pkgs.lib; {
-              description = "HomeKit bridge for Tasmota smart plugs";
-              homepage = "https://github.com/kradalby/tasmota-homekit";
-              license = licenses.mit;
-              maintainers = [ ];
-            };
-          };
+          formatter = fc.formatter common;
 
           # Alias for the package
           packages.tasmota-homekit = self.packages.${system}.default;
@@ -112,7 +103,10 @@
 
           checks =
             {
-              package = self.packages.${system}.default;
+              build = fc.goBuild common;
+              gotest = fc.goTest common;
+              golangci-lint = fc.goLint common;
+              formatting = fc.goFormat common;
             }
             // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
               module-test = import ./nix/test.nix { inherit pkgs system self; };

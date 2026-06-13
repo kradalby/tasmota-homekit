@@ -14,7 +14,8 @@ import (
 // SetupDebugHandlers registers the HAP debug handler without using tsweb.Debugger to avoid pattern conflicts
 func SetupDebugHandlers(kraWeb interface {
 	Handle(pattern string, handler http.Handler)
-}, hapManager *HAPManager) {
+}, hapManager *HAPManager,
+) {
 	// Directly register the HAP debug endpoint
 	kraWeb.Handle("/debug/hap", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		debugInfo := hapManager.DebugInfo()

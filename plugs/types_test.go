@@ -9,7 +9,7 @@ import (
 func TestLoadConfigValidatesPlugs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.hujson")
-	if err := os.WriteFile(path, []byte(`{"plugs":[{"id":"a","name":"A","address":"1"}]}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"plugs":[{"id":"a","name":"A","address":"1"}]}`), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -26,7 +26,7 @@ func TestLoadConfigValidatesPlugs(t *testing.T) {
 func TestLoadConfigRejectsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.hujson")
-	if err := os.WriteFile(path, []byte(`{"plugs":[]}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"plugs":[]}`), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestLoadConfigRejectsDuplicateIDs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dupe.hujson")
 	payload := `{"plugs":[{"id":"a","name":"A","address":"1"},{"id":"a","name":"B","address":"2"}]}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
