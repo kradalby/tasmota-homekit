@@ -229,7 +229,8 @@ func (hm *HAPManager) UpdateState(event events.StateUpdateEvent) {
 	hm.outgoingUpdates.Add(1)
 	hm.lastActivity.Store(time.Now().Unix())
 
-	slog.Debug("Updated HomeKit state",
+	slog.Debug(
+		"Updated HomeKit state",
 		"plug_id", event.PlugID,
 		"on", event.On,
 		"accessory_id", acc.ID(),

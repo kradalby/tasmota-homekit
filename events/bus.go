@@ -60,7 +60,8 @@ func New(logger *slog.Logger) (*Bus, error) {
 		b.clients[name] = b.bus.Client(string(name))
 	}
 
-	logger.Info("eventbus initialized",
+	logger.Info(
+		"eventbus initialized",
 		slog.Int("client_count", len(b.clients)),
 	)
 
@@ -87,14 +88,16 @@ func (b *Bus) PublishStateUpdate(client *eventbus.Client, event StateUpdateEvent
 
 	last, ok := b.lastStates[event.PlugID]
 	if ok && event.Equals(last) {
-		b.logger.Debug("skipping duplicate state update",
+		b.logger.Debug(
+			"skipping duplicate state update",
 			slog.String("plug_id", event.PlugID),
 			slog.String("source", event.Source),
 		)
 		return
 	}
 
-	b.logger.Debug("publishing state update",
+	b.logger.Debug(
+		"publishing state update",
 		slog.String("plug_id", event.PlugID),
 		slog.String("source", event.Source),
 		slog.Bool("on", event.On),
@@ -109,7 +112,8 @@ func (b *Bus) PublishStateUpdate(client *eventbus.Client, event StateUpdateEvent
 
 // PublishCommand emits a command event for metrics/debug consumers.
 func (b *Bus) PublishCommand(client *eventbus.Client, event CommandEvent) {
-	b.logger.Debug("publishing command event",
+	b.logger.Debug(
+		"publishing command event",
 		slog.String("plug_id", event.PlugID),
 		slog.String("source", event.Source),
 		slog.String("command_type", string(event.CommandType)),
@@ -122,7 +126,8 @@ func (b *Bus) PublishCommand(client *eventbus.Client, event CommandEvent) {
 
 // PublishConnectionStatus emits lifecycle updates for components (web, hap, mqtt, etc.).
 func (b *Bus) PublishConnectionStatus(client *eventbus.Client, event ConnectionStatusEvent) {
-	b.logger.Debug("publishing connection status",
+	b.logger.Debug(
+		"publishing connection status",
 		slog.String("component", event.Component),
 		slog.String("status", string(event.Status)),
 	)

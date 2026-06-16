@@ -94,7 +94,8 @@ func NewManager(
 
 		pm.publishStateUpdate("initial", plugConfig.ID, *pm.states[plugConfig.ID])
 
-		slog.Info("Initialized plug client",
+		slog.Info(
+			"Initialized plug client",
 			"id", plugConfig.ID,
 			"address", plugConfig.Address,
 		)
@@ -110,7 +111,8 @@ func (pm *Manager) ConfigureMQTT(ctx context.Context, plugID, brokerHost string,
 		return fmt.Errorf("plug %s not found", plugID)
 	}
 
-	slog.Info("Configuring MQTT for plug",
+	slog.Info(
+		"Configuring MQTT for plug",
 		"plug_id", plugID,
 		"broker", brokerHost,
 		"port", brokerPort,
@@ -140,7 +142,8 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 	pm.mu.RLock()
 	state := pm.states[plugID]
 	if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 60*time.Second {
-		slog.Warn("Attempting to control plug that hasn't been seen recently",
+		slog.Warn(
+			"Attempting to control plug that hasn't been seen recently",
 			"id", plugID,
 			"last_seen", state.LastSeen,
 			"time_since", time.Since(state.LastSeen).Round(time.Second),
@@ -274,7 +277,8 @@ func (pm *Manager) ProcessCommands(ctx context.Context) {
 		select {
 		case cmd := <-pm.commands:
 			if err := pm.SetPower(ctx, cmd.PlugID, cmd.On); err != nil {
-				slog.Error("Failed to process command",
+				slog.Error(
+					"Failed to process command",
 					"plug_id", cmd.PlugID,
 					"error", err,
 				)
@@ -340,7 +344,8 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 			stateCopy := *state
 			pm.mu.Unlock()
 
-			slog.Debug("Merged state from eventbus",
+			slog.Debug(
+				"Merged state from eventbus",
 				"plug_id", event.PlugID,
 				"on", stateCopy.On,
 				"power", stateCopy.Power,
@@ -374,12 +379,14 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 				for plugID, state := range pm.states {
 					if state.LastSeen.IsZero() {
 						pm.mu.RUnlock()
-						slog.Warn("Plug has never connected to MQTT, attempting reconfiguration",
+						slog.Warn(
+							"Plug has never connected to MQTT, attempting reconfiguration",
 							"plug_id", plugID,
 							"time_since_startup", time.Since(initialConfigTime).Round(time.Second),
 						)
 						if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
-							slog.Error("Failed to reconfigure MQTT for offline plug",
+							slog.Error(
+								"Failed to reconfigure MQTT for offline plug",
 								"plug_id", plugID,
 								"error", err,
 							)
@@ -389,7 +396,8 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 							})
 						} else {
 							if _, err := pm.GetStatus(ctx, plugID); err != nil {
-								slog.Error("Plug not reachable via HTTP",
+								slog.Error(
+									"Plug not reachable via HTTP",
 									"plug_id", plugID,
 									"error", err,
 								)
@@ -408,13 +416,15 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 						timeSince := time.Since(state.LastSeen).Round(time.Second)
 						pm.mu.RUnlock()
 
-						slog.Warn("Plug hasn't been seen in a while, checking connectivity",
+						slog.Warn(
+							"Plug hasn't been seen in a while, checking connectivity",
 							"plug_id", plugID,
 							"time_since_last_seen", timeSince,
 						)
 
 						if _, err := pm.GetStatus(ctx, plugID); err != nil {
-							slog.Error("Plug not reachable via HTTP",
+							slog.Error(
+								"Plug not reachable via HTTP",
 								"plug_id", plugID,
 								"error", err,
 								"time_since_last_seen", timeSince,
@@ -424,11 +434,13 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 								Error:  fmt.Errorf("plug unreachable for %s: %w", timeSince, err),
 							})
 						} else {
-							slog.Info("Plug reachable via HTTP but not MQTT, reconfiguring",
+							slog.Info(
+								"Plug reachable via HTTP but not MQTT, reconfiguring",
 								"plug_id", plugID,
 							)
 							if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
-								slog.Error("Failed to reconfigure MQTT",
+								slog.Error(
+									"Failed to reconfigure MQTT",
 									"plug_id", plugID,
 									"error", err,
 								)

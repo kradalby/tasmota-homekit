@@ -47,13 +47,15 @@ func Main() {
 	}
 	slog.SetDefault(logger)
 
-	slog.Info("Starting Tasmota HomeKit Bridge",
+	slog.Info(
+		"Starting Tasmota HomeKit Bridge",
 		"version", version,
 		"log_level", cfg.LogLevel,
 		"log_format", cfg.LogFormat,
 	)
 
-	slog.Info("Configuration loaded",
+	slog.Info(
+		"Configuration loaded",
 		"hap_addr", cfg.HAPAddrPort().String(),
 		"web_addr", cfg.WebAddrPort().String(),
 		"mqtt_addr", cfg.MQTTAddrPort().String(),
@@ -68,7 +70,8 @@ func Main() {
 
 	slog.Info("Loaded plugs", "count", len(plugCfg.Plugs))
 	for _, plug := range plugCfg.Plugs {
-		slog.Info("Plug configured",
+		slog.Info(
+			"Plug configured",
 			"id", plug.ID,
 			"name", plug.Name,
 			"address", plug.Address,
@@ -187,13 +190,15 @@ func Main() {
 		go func(plugID string) {
 			state, err := plugManager.GetStatus(ctx, plugID)
 			if err != nil {
-				slog.Warn("Failed to get initial status",
+				slog.Warn(
+					"Failed to get initial status",
 					"plug_id", plugID,
 					"error", err,
 				)
 				return
 			}
-			slog.Info("Initial plug state",
+			slog.Info(
+				"Initial plug state",
 				"plug_id", plugID,
 				"on", state.On,
 			)
@@ -205,7 +210,8 @@ func Main() {
 			time.Sleep(time.Second)
 
 			if err := plugManager.ConfigureMQTT(ctx, plugID, localIP, int(cfg.MQTTAddrPort().Port())); err != nil {
-				slog.Error("Failed to configure MQTT for plug",
+				slog.Error(
+					"Failed to configure MQTT for plug",
 					"plug_id", plugID,
 					"error", err,
 				)
@@ -263,7 +269,8 @@ func Main() {
 	})
 
 	go func() {
-		slog.Info("Starting HomeKit server",
+		slog.Info(
+			"Starting HomeKit server",
 			"addr", cfg.HAPAddrPort().String(),
 			"pin", cfg.HAPPin,
 		)

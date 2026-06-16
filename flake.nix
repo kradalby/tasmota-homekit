@@ -23,7 +23,7 @@
             root = ./.;
             pname = "tasmota-homekit";
             version = self.rev or "dev";
-            vendorHash = "sha256-/b99h4xRXIKzVeL3BI8kb86czmNQUe2Cnjd3UdePBtM=";
+            vendorHash = "sha256-LNHgOBT/FMrBkGDaMXP4pqr3zYSQimCGL7PHnA+SA3A=";
             goPkg = go;
             embedDirs = [ ./assets ];
             # main_test.go reads this fixture by relative path.

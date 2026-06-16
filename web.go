@@ -224,8 +224,10 @@ func (ws *WebServer) snapshotStatuses() []events.ConnectionStatusEvent {
 
 // renderPage renders a basic HTML page
 func (ws *WebServer) renderPage(title string, content elem.Node) string {
-	page := elem.Html(attrs.Props{},
-		elem.Head(attrs.Props{},
+	page := elem.Html(
+		attrs.Props{},
+		elem.Head(
+			attrs.Props{},
 			elem.Meta(attrs.Props{attrs.Charset: "utf-8"}),
 			elem.Meta(attrs.Props{attrs.Name: "viewport", attrs.Content: "width=device-width, initial-scale=1"}),
 			elem.Title(attrs.Props{}, elem.Text(title)),
@@ -283,15 +285,19 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 
 	// Build children for the main card div
 	cardChildren := []elem.Node{
-		elem.Div(attrs.Props{attrs.Class: "plug-header"},
+		elem.Div(
+			attrs.Props{attrs.Class: "plug-header"},
 			elem.Div(attrs.Props{attrs.Class: "plug-icon"}, elem.Text(icon)),
-			elem.Div(attrs.Props{attrs.Class: "plug-info"},
+			elem.Div(
+				attrs.Props{attrs.Class: "plug-info"},
 				elem.Div(attrs.Props{attrs.Class: "plug-name"}, elem.Text(info.Name)),
-				elem.Div(attrs.Props{attrs.Class: "plug-status"},
+				elem.Div(
+					attrs.Props{attrs.Class: "plug-status"},
 					elem.Div(attrs.Props{"data-role": "status-label"}, elem.Text(fmt.Sprintf("Status: %s", statusText))),
 					elem.Div(attrs.Props{attrs.Class: "text-sm text-gray-500", "data-role": "last-updated"}, elem.Text(fmt.Sprintf("Last updated: %s", state.LastUpdated.Format("15:04:05")))),
 				),
-				elem.Div(attrs.Props{attrs.Class: "connection-status"},
+				elem.Div(
+					attrs.Props{attrs.Class: "connection-status"},
 					elem.Span(attrs.Props{"data-role": "connection-indicator", attrs.Class: "connection-indicator " + connectionIndicator}),
 					elem.Span(attrs.Props{"data-role": "connection-text"}, elem.Text(connectionText)),
 				),
@@ -300,28 +306,37 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 	}
 
 	if info.Features != nil && info.Features.PowerMonitoring {
-		cardChildren = append(cardChildren, elem.Div(attrs.Props{attrs.Class: "electrical-stats"},
-			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+		cardChildren = append(cardChildren, elem.Div(
+			attrs.Props{attrs.Class: "electrical-stats"},
+			elem.Div(
+				attrs.Props{attrs.Class: "stat-item"},
 				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Power:")),
-				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "power-value"},
+				elem.Span(
+					attrs.Props{attrs.Class: "stat-value", "data-role": "power-value"},
 					elem.Text(fmt.Sprintf("%.1f W", state.Power)),
 				),
 			),
-			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+			elem.Div(
+				attrs.Props{attrs.Class: "stat-item"},
 				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Voltage:")),
-				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "voltage-value"},
+				elem.Span(
+					attrs.Props{attrs.Class: "stat-value", "data-role": "voltage-value"},
 					elem.Text(fmt.Sprintf("%.1f V", state.Voltage)),
 				),
 			),
-			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+			elem.Div(
+				attrs.Props{attrs.Class: "stat-item"},
 				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Current:")),
-				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "current-value"},
+				elem.Span(
+					attrs.Props{attrs.Class: "stat-value", "data-role": "current-value"},
 					elem.Text(fmt.Sprintf("%.2f A", state.Current)),
 				),
 			),
-			elem.Div(attrs.Props{attrs.Class: "stat-item"},
+			elem.Div(
+				attrs.Props{attrs.Class: "stat-item"},
 				elem.Span(attrs.Props{attrs.Class: "stat-label"}, elem.Text("Energy:")),
-				elem.Span(attrs.Props{attrs.Class: "stat-value", "data-role": "energy-value"},
+				elem.Span(
+					attrs.Props{attrs.Class: "stat-value", "data-role": "energy-value"},
 					elem.Text(fmt.Sprintf("%.3f kWh", state.Energy)),
 				),
 			),
@@ -384,39 +399,50 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	var homekitSection elem.Node
 	if ws.hapPin != "" {
 		var qrContent []elem.Node
-		qrContent = append(qrContent,
-			elem.Div(attrs.Props{attrs.Class: "homekit-pin"},
+		qrContent = append(
+			qrContent,
+			elem.Div(
+				attrs.Props{attrs.Class: "homekit-pin"},
 				elem.Span(attrs.Props{attrs.Class: "homekit-pin-label"}, elem.Text("Setup PIN")),
 				elem.Span(attrs.Props{attrs.Class: "homekit-pin-value"}, elem.Text(ws.hapPin)),
 			),
 		)
 
 		if ws.qrCode != "" {
-			qrContent = append(qrContent,
-				elem.Div(attrs.Props{attrs.Class: "qr-code-block"},
+			qrContent = append(
+				qrContent,
+				elem.Div(
+					attrs.Props{attrs.Class: "qr-code-block"},
 					elem.Pre(attrs.Props{attrs.Class: "qr-code"}, elem.Text(ws.qrCode)),
 				),
-				elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+				elem.P(
+					attrs.Props{attrs.Class: "homekit-instructions"},
 					elem.Text("Scan the QR code from the Home app or camera on your iPhone/iPad."),
 				),
 			)
 		} else {
-			qrContent = append(qrContent,
-				elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+			qrContent = append(
+				qrContent,
+				elem.P(
+					attrs.Props{attrs.Class: "homekit-instructions"},
 					elem.Text("QR code is not available on this host. Use the PIN above in the Home app."),
 				),
 			)
 		}
 
-		qrContent = append(qrContent,
-			elem.P(attrs.Props{attrs.Class: "homekit-instructions"},
+		qrContent = append(
+			qrContent,
+			elem.P(
+				attrs.Props{attrs.Class: "homekit-instructions"},
 				elem.Text("Home app → Add Accessory → More Options → Select \"Tasmota Bridge\"."),
 			),
 			elem.A(attrs.Props{attrs.Href: "/qrcode", attrs.Class: "homekit-link"}, elem.Text("Open standalone QR view")),
 		)
 
-		homekitSection = elem.Details(attrs.Props{attrs.Class: "homekit-banner"},
-			elem.Summary(nil,
+		homekitSection = elem.Details(
+			attrs.Props{attrs.Class: "homekit-banner"},
+			elem.Summary(
+				nil,
 				elem.Span(attrs.Props{attrs.Class: "homekit-summary-title"}, elem.Text("HomeKit Pairing")),
 				elem.Span(attrs.Props{attrs.Class: "homekit-summary-caption"}, elem.Text("Tap to reveal setup PIN & QR code")),
 			),
@@ -424,12 +450,14 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	content := elem.Div(attrs.Props{},
+	content := elem.Div(
+		attrs.Props{},
 		elem.H1(attrs.Props{}, elem.Text("Tasmota HomeKit Bridge")),
 		elem.P(attrs.Props{}, elem.Text(fmt.Sprintf("Managing %d plugs", len(snapshot)))),
 		homekitSection,
 		elem.Div(attrs.Props{attrs.Class: "plugs-grid"}, plugElements...),
-		elem.Div(attrs.Props{attrs.Class: "events"},
+		elem.Div(
+			attrs.Props{attrs.Class: "events"},
 			elem.H2(attrs.Props{}, elem.Text("Recent Events")),
 			elem.Div(attrs.Props{}, eventElements...),
 		),
@@ -508,7 +536,8 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 	ws.sseClientsMu.RUnlock()
 
 	rows := []elem.Node{
-		elem.Tr(attrs.Props{},
+		elem.Tr(
+			attrs.Props{},
 			elem.Th(attrs.Props{}, elem.Text("Plug ID")),
 			elem.Th(attrs.Props{}, elem.Text("Name")),
 			elem.Th(attrs.Props{}, elem.Text("On")),
@@ -519,8 +548,10 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 	}
 
 	for _, evt := range snapshot {
-		rows = append(rows,
-			elem.Tr(attrs.Props{},
+		rows = append(
+			rows,
+			elem.Tr(
+				attrs.Props{},
 				elem.Td(attrs.Props{}, elem.Text(evt.PlugID)),
 				elem.Td(attrs.Props{}, elem.Text(evt.Name)),
 				elem.Td(attrs.Props{}, elem.Text(fmt.Sprintf("%t", evt.On))),
@@ -532,7 +563,8 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 	}
 
 	statusRows := []elem.Node{
-		elem.Tr(attrs.Props{},
+		elem.Tr(
+			attrs.Props{},
 			elem.Th(attrs.Props{}, elem.Text("Component")),
 			elem.Th(attrs.Props{}, elem.Text("Status")),
 			elem.Th(attrs.Props{}, elem.Text("Updated")),
@@ -541,8 +573,10 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 	}
 
 	for _, status := range ws.snapshotStatuses() {
-		statusRows = append(statusRows,
-			elem.Tr(attrs.Props{},
+		statusRows = append(
+			statusRows,
+			elem.Tr(
+				attrs.Props{},
 				elem.Td(attrs.Props{}, elem.Text(status.Component)),
 				elem.Td(attrs.Props{}, elem.Text(string(status.Status))),
 				elem.Td(attrs.Props{}, elem.Text(status.Timestamp.Format(time.RFC3339))),
@@ -551,7 +585,8 @@ func (ws *WebServer) HandleEventBusDebug(w http.ResponseWriter, r *http.Request)
 		)
 	}
 
-	content := elem.Div(attrs.Props{},
+	content := elem.Div(
+		attrs.Props{},
 		elem.H1(attrs.Props{}, elem.Text("EventBus Debug")),
 		elem.P(attrs.Props{}, elem.Text(fmt.Sprintf("Connected SSE clients: %d", clientCount))),
 		elem.Table(attrs.Props{"border": "1", "cellpadding": "4", "cellspacing": "0"}, rows...),

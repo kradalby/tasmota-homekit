@@ -80,7 +80,8 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	topic := pk.TopicName
 	payload := pk.Payload
 
-	slog.Debug("MQTT message received",
+	slog.Debug(
+		"MQTT message received",
 		"topic", topic,
 		"payload", string(payload),
 	)
@@ -133,7 +134,8 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	// Update power state if present
 	if powerState != "" {
 		partialState.On = powerState == "ON"
-		slog.Info("Plug state updated from MQTT",
+		slog.Info(
+			"Plug state updated from MQTT",
 			"plug_id", plugID,
 			"on", partialState.On,
 		)
@@ -163,7 +165,8 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 			partialState.Energy = total
 		}
 
-		slog.Debug("Electrical stats updated from MQTT",
+		slog.Debug(
+			"Electrical stats updated from MQTT",
 			"plug_id", plugID,
 			"power", partialState.Power,
 			"voltage", partialState.Voltage,
@@ -173,7 +176,8 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	if powerState == "" && partialState.Power == 0 && partialState.Voltage == 0 {
-		slog.Debug("Plug connection tracked via MQTT",
+		slog.Debug(
+			"Plug connection tracked via MQTT",
 			"plug_id", plugID,
 			"last_seen", partialState.LastSeen,
 		)
