@@ -9,13 +9,30 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, flake-checks }:
+    let
+      # Rebuild the Go dev tools against the latest Go so the formatter and
+      # linters can parse the language version go.mod targets. A gofumpt built
+      # against an older Go rejects newer syntax outright, and goimports ships
+      # wrapped with a `go` on PATH that must be at least the go.mod directive
+      # or GOTOOLCHAIN=auto tries to fetch a toolchain from inside the
+      # network-less treefmt sandbox.
+      goToolsOverlay = _: prev: {
+        gofumpt = prev.gofumpt.override { buildGoModule = prev.buildGoLatestModule; };
+        gotools = prev.gotools.override {
+          buildGoModule = prev.buildGoLatestModule;
+          go = prev.go_latest;
+        };
+      };
+    in
     flake-utils.lib.eachDefaultSystem
       (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ goToolsOverlay ];
+          };
 
-          # Use Go 1.26 (required by tailscale v1.96.x)
-          go = pkgs.go_1_26;
+          go = pkgs.go_latest;
 
           fc = flake-checks.lib;
           common = {
@@ -23,7 +40,7 @@
             root = ./.;
             pname = "tasmota-homekit";
             version = self.rev or "dev";
-            vendorHash = "sha256-LNHgOBT/FMrBkGDaMXP4pqr3zYSQimCGL7PHnA+SA3A=";
+            vendorHash = "sha256-9urpxzYILVVJQqUN1HEcsHs2QEShdPwC2dLac19E9Js=";
             goPkg = go;
             embedDirs = [ ./assets ];
             # main_test.go reads this fixture by relative path.
@@ -39,6 +56,7 @@
               golangci-lint
               gopls
               gotools
+              gofumpt
               go-tools
               delve
 
