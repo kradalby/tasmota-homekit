@@ -141,7 +141,7 @@
           golangci-lint = fc.goLint common;
           formatting = fc.goFormat common;
         }
-        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           module-test = import ./nix/test.nix { inherit pkgs system self; };
         };
       }
