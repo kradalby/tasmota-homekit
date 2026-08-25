@@ -14,6 +14,7 @@ import (
 
 	homekitqr "github.com/kradalby/homekit-qr"
 	"github.com/kradalby/kra/web"
+
 	appconfig "github.com/kradalby/tasmota-homekit/config"
 	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/kradalby/tasmota-homekit/logging"
@@ -307,11 +308,9 @@ func Main() {
 	fmt.Printf("HomeKit bridge ready - pair with PIN: %s\n\n", cfg.HAPPin)
 
 	qrConfig := homekitqr.QRCodeConfig{
-		SetupURIConfig: homekitqr.SetupURIConfig{
-			PairingCode: cfg.HAPPin,
-			SetupID:     "4412",
-			Category:    homekitqr.CategoryBridge,
-		},
+		PairingCode: cfg.HAPPin,
+		SetupID:     "4412",
+		Category:    homekitqr.CategoryBridge,
 	}
 
 	qr, err := homekitqr.GenerateQRTerminal(qrConfig)

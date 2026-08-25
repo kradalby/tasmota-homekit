@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/kradalby/tasmota-homekit/plugs"
-	"github.com/stretchr/testify/assert"
 )
 
 type fakePlugProvider struct {
@@ -55,9 +57,7 @@ func (f *fakePlugProvider) Snapshot() map[string]struct {
 		Plug  plugs.Plug
 		State plugs.State
 	}, len(f.items))
-	for id, item := range f.items {
-		out[id] = item
-	}
+	maps.Copy(out, f.items)
 	return out
 }
 
@@ -243,9 +243,9 @@ func TestHandleSSE(t *testing.T) {
 	}
 
 	var lastData string
-	for _, line := range strings.Split(rec.body(), "\n") {
-		if strings.HasPrefix(line, "data:") {
-			lastData = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	for line := range strings.SplitSeq(rec.body(), "\n") {
+		if after, ok := strings.CutPrefix(line, "data:"); ok {
+			lastData = strings.TrimSpace(after)
 		}
 	}
 	if lastData == "" {
@@ -264,8 +264,7 @@ func TestHandleSSE(t *testing.T) {
 func TestHandleEventBusDebugShowsStatuses(t *testing.T) {
 	ws, _, _, bus := newTestWebServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ws.Start(ctx)
 
 	client, err := bus.Client(events.ClientHAP)
@@ -340,8 +339,7 @@ func TestHandleQRCode(t *testing.T) {
 func TestHandleEventBusDebug(t *testing.T) {
 	ws, _, _, bus := newTestWebServer(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	ws.Start(ctx)
 
 	client, err := bus.Client(events.ClientPlugManager)

@@ -1,10 +1,12 @@
 package tasmotahomekit
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/brutella/hap"
@@ -144,28 +146,25 @@ func (hm *HAPManager) DebugInfo() HAPDebugInfo {
 		})
 	}
 
-	sort.Slice(info.Accessories, func(i, j int) bool {
-		type order int
-		orderFor := func(accType string) order {
-			switch accType {
-			case "Bridge":
-				return 0
-			case "Outlet":
-				return 1
-			case "Lightbulb":
-				return 2
-			default:
-				return 3
-			}
+	typeOrder := func(accType string) int {
+		switch accType {
+		case "Bridge":
+			return 0
+		case "Outlet":
+			return 1
+		case "Lightbulb":
+			return 2
+		default:
+			return 3
+		}
+	}
+
+	slices.SortFunc(info.Accessories, func(a, b AccessoryInfo) int {
+		if c := cmp.Compare(typeOrder(a.Type), typeOrder(b.Type)); c != 0 {
+			return c
 		}
 
-		orderI := orderFor(info.Accessories[i].Type)
-		orderJ := orderFor(info.Accessories[j].Type)
-		if orderI != orderJ {
-			return orderI < orderJ
-		}
-
-		return info.Accessories[i].Name < info.Accessories[j].Name
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	return info

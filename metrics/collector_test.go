@@ -1,16 +1,16 @@
 package metrics
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kradalby/tasmota-homekit/events"
 )
 
 func testLogger() *slog.Logger {
@@ -26,8 +26,7 @@ func newTestBus(t *testing.T) *events.Bus {
 }
 
 func TestCollectorObservesEvents(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	bus := newTestBus(t)
 	reg := prometheus.NewRegistry()

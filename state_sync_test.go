@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kradalby/tasmota-homekit/events"
-	"github.com/kradalby/tasmota-homekit/plugs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/util/eventbus"
+
+	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
 // TestStateSyncEnvironment sets up a complete environment with Manager, HAP, and Web
@@ -139,7 +140,7 @@ func (env *TestStateSyncEnvironment) simulateMQTTUpdate(plugID string, on bool) 
 }
 
 // assertAllStatesMatch verifies that Manager, HAP, and Web all show the same state
-func (env *TestStateSyncEnvironment) assertAllStatesMatch(plugID string, expectedOn bool, msgAndArgs ...interface{}) {
+func (env *TestStateSyncEnvironment) assertAllStatesMatch(plugID string, expectedOn bool, msgAndArgs ...any) {
 	env.t.Helper()
 
 	// Give time for events to propagate
