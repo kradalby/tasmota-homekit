@@ -379,3 +379,67 @@ func TestHandleEventBusDebug(t *testing.T) {
 		t.Fatalf("expected plug info in response: %s", body)
 	}
 }
+
+// TestEventLogConcurrentAccess exercises the event log from two handlers at
+// once. HandleToggle appends via LogEvent while HandleIndex reads the slice, so
+// an unsynchronised eventLog trips the race detector here.
+func TestEventLogConcurrentAccess(t *testing.T) {
+	ws, _, _, _ := newTestWebServer(t)
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			ws.HandleToggle(httptest.NewRecorder(), req)
+		}()
+
+		go func() {
+			defer wg.Done()
+			ws.HandleIndex(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		}()
+	}
+	wg.Wait()
+}
+
+// TestCloseWhileSSEConnected shuts the server down with a live SSE client.
+// Close must wake the handler and must not close the per-client channel the
+// handler already owns, or the handler's own cleanup panics on a double close.
+func TestCloseWhileSSEConnected(t *testing.T) {
+	ws, _, _, _ := newTestWebServer(t)
+
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(t.Context())
+
+	done := make(chan any, 1)
+	go func() {
+		defer func() { done <- recover() }()
+		ws.HandleSSE(rec, req)
+		done <- nil
+	}()
+
+	// Wait for the handler to register itself as an SSE client.
+	for range 200 {
+		ws.sseClientsMu.RLock()
+		n := len(ws.sseClients)
+		ws.sseClientsMu.RUnlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	ws.Close()
+
+	select {
+	case r := <-done:
+		if r != nil {
+			t.Fatalf("HandleSSE panicked on shutdown: %v", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleSSE did not return after Close")
+	}
+}
