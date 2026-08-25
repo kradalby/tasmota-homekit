@@ -7,8 +7,8 @@ require (
 	github.com/brutella/hap v0.0.35
 	github.com/chasefleming/elem-go v0.36.0
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
-	github.com/kradalby/kra v0.0.0-20260825155642-44bd77913307
-	github.com/kradalby/tasmota-go v0.0.0-20260825162049-87606151393d
+	github.com/kradalby/kra v0.0.0-20260825193819-f96ca865dd41
+	github.com/kradalby/tasmota-go v0.0.0-20260825193828-c2d344ecb14d
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
