@@ -1,4 +1,9 @@
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 with lib;
 
@@ -11,7 +16,8 @@ in
   imports = [
     (mkRenamedOptionModule
       [ "services" "tasmota-homekit" "hap" "storagePath" ]
-      [ "services" "tasmota-homekit" "dataDir" ])
+      [ "services" "tasmota-homekit" "dataDir" ]
+    )
   ];
 
   options.services.tasmota-homekit = {
@@ -121,13 +127,21 @@ in
 
     log = {
       level = mkOption {
-        type = types.enum [ "debug" "info" "warn" "error" ];
+        type = types.enum [
+          "debug"
+          "info"
+          "warn"
+          "error"
+        ];
         default = "info";
         description = "Logging level for the service.";
       };
 
       format = mkOption {
-        type = types.enum [ "json" "console" ];
+        type = types.enum [
+          "json"
+          "console"
+        ];
         default = "json";
         description = "Logging format.";
       };
@@ -213,10 +227,9 @@ in
           })
           // cfg.environment;
 
-          tailscaleExport =
-            optionalString (cfg.tailscale.authKeyFile != null) ''
-              export TASMOTA_HOMEKIT_TS_AUTHKEY="$(cat "$CREDENTIALS_DIRECTORY/tailscale-authkey")"
-            '';
+          tailscaleExport = optionalString (cfg.tailscale.authKeyFile != null) ''
+            export TASMOTA_HOMEKIT_TS_AUTHKEY="$(cat "$CREDENTIALS_DIRECTORY/tailscale-authkey")"
+          '';
 
           startScript = pkgs.writeShellScript "tasmota-homekit-start" ''
             set -euo pipefail
@@ -236,9 +249,11 @@ in
             StartLimitBurst = 5;
           };
 
-          restartTriggers =
-            [ cfg.package cfg.plugsConfig ]
-            ++ optional (cfg.environmentFile != null) cfg.environmentFile;
+          restartTriggers = [
+            cfg.package
+            cfg.plugsConfig
+          ]
+          ++ optional (cfg.environmentFile != null) cfg.environmentFile;
 
           environment = envVars;
 

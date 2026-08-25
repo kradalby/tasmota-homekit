@@ -1,4 +1,8 @@
-{ pkgs, system, self }:
+{
+  pkgs,
+  system,
+  self,
+}:
 
 pkgs.testers.runNixOSTest {
   name = "tasmota-homekit-module";
