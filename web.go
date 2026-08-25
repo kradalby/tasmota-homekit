@@ -49,6 +49,7 @@ type WebServer struct {
 	plugProvider     plugStateProvider
 	controller       PlugController
 	eventLog         []string
+	eventLogMu       sync.Mutex
 	eventBus         *events.Bus
 	client           *eventbus.Client
 	stateSubscriber  *eventbus.Subscriber[events.StateUpdateEvent]
@@ -62,7 +63,10 @@ type WebServer struct {
 	hapPin           string
 	qrCode           string
 	hapManager       *HAPManager
-	ctx              context.Context
+
+	// done is closed by Close to wake handlers that outlive the server.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewWebServer creates a new web server
@@ -88,20 +92,41 @@ func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controlle
 		hapPin:           hapPin,
 		qrCode:           qrCode,
 		hapManager:       hapManager,
-		ctx:              context.Background(),
+		done:             make(chan struct{}),
 	}
 }
 
 // LogEvent adds an event to the log
 func (ws *WebServer) LogEvent(event string) {
+	ws.eventLogMu.Lock()
+	defer ws.eventLogMu.Unlock()
+
 	ws.eventLog = append(ws.eventLog, fmt.Sprintf("%s: %s", time.Now().Format("15:04:05"), event))
 	if len(ws.eventLog) > 100 {
 		ws.eventLog = ws.eventLog[1:]
 	}
 }
 
+// recentEvents returns up to n of the most recent log entries, newest first.
+// Handlers run concurrently with LogEvent, so they must copy under the lock
+// rather than range over the live slice.
+func (ws *WebServer) recentEvents(n int) []string {
+	ws.eventLogMu.Lock()
+	defer ws.eventLogMu.Unlock()
+
+	if n > len(ws.eventLog) {
+		n = len(ws.eventLog)
+	}
+
+	out := make([]string, 0, n)
+	for _, entry := range slices.Backward(ws.eventLog[len(ws.eventLog)-n:]) {
+		out = append(out, entry)
+	}
+
+	return out
+}
+
 func (ws *WebServer) Start(ctx context.Context) {
-	ws.ctx = ctx
 	go ws.processStateChanges(ctx)
 	go ws.processConnectionStatuses(ctx)
 	ws.publishConnectionStatus(events.ConnectionStatusConnecting, "")
@@ -126,15 +151,17 @@ func (ws *WebServer) Start(ctx context.Context) {
 }
 
 func (ws *WebServer) Close() {
-	ws.stateSubscriber.Close()
-	ws.statusSubscriber.Close()
+	ws.closeOnce.Do(func() {
+		close(ws.done)
+		ws.stateSubscriber.Close()
+		ws.statusSubscriber.Close()
 
-	ws.sseClientsMu.Lock()
-	for client := range ws.sseClients {
-		close(client)
-	}
-	ws.sseClients = make(map[chan events.StateUpdateEvent]struct{})
-	ws.sseClientsMu.Unlock()
+		// Unregister the SSE clients so broadcasts stop, but leave the channels
+		// open: each HandleSSE owns its own channel and closes it on return.
+		ws.sseClientsMu.Lock()
+		ws.sseClients = make(map[chan events.StateUpdateEvent]struct{})
+		ws.sseClientsMu.Unlock()
+	})
 }
 
 func (ws *WebServer) publishConnectionStatus(status events.ConnectionStatus, errMsg string) {
@@ -389,8 +416,8 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 
 	// Add event log
 	var eventElements []elem.Node
-	for i := len(ws.eventLog) - 1; i >= 0 && i >= len(ws.eventLog)-20; i-- {
-		eventElements = append(eventElements, elem.Div(attrs.Props{attrs.Class: "event"}, elem.Text(ws.eventLog[i])))
+	for _, entry := range ws.recentEvents(20) {
+		eventElements = append(eventElements, elem.Div(attrs.Props{attrs.Class: "event"}, elem.Text(entry)))
 	}
 
 	// Build HomeKit pairing section
@@ -647,7 +674,7 @@ func (ws *WebServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 		case <-r.Context().Done():
 			return
-		case <-ws.ctx.Done():
+		case <-ws.done:
 			return
 		}
 	}
