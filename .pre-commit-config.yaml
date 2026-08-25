@@ -23,9 +23,9 @@ repos:
 
   - repo: local
     hooks:
-      - id: nixpkgs-fmt
-        name: nixpkgs-fmt
-        entry: nixpkgs-fmt
+      - id: nixfmt
+        name: nixfmt
+        entry: nixfmt
         language: system
         files: \.nix$
 

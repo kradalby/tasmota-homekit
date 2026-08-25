@@ -67,7 +67,7 @@
             delve
 
             # Nix tooling
-            nixpkgs-fmt
+            nixfmt
 
             # Pre-commit hooks
             prek
