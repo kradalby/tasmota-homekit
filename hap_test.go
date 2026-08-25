@@ -1,18 +1,18 @@
 package tasmotahomekit
 
 import (
-	"context"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/brutella/hap/accessory"
-	"github.com/kradalby/tasmota-homekit/events"
-	"github.com/kradalby/tasmota-homekit/plugs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/util/eventbus"
+
+	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
 func newTestEventsBus(t *testing.T) *events.Bus {
@@ -57,8 +57,7 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
 	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	hm.Start(ctx)
 

@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +17,10 @@ import (
 	"github.com/chasefleming/elem-go"
 	"github.com/chasefleming/elem-go/attrs"
 	"github.com/kradalby/kra/web"
+	"tailscale.com/util/eventbus"
+
 	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/kradalby/tasmota-homekit/plugs"
-	"tailscale.com/util/eventbus"
 )
 
 //go:embed assets/style.css
@@ -199,8 +201,8 @@ func (ws *WebServer) snapshotState() []events.StateUpdateEvent {
 		snapshot = append(snapshot, evt)
 	}
 
-	sort.Slice(snapshot, func(i, j int) bool {
-		return snapshot[i].PlugID < snapshot[j].PlugID
+	slices.SortFunc(snapshot, func(a, b events.StateUpdateEvent) int {
+		return strings.Compare(a.PlugID, b.PlugID)
 	})
 
 	return snapshot
@@ -215,8 +217,8 @@ func (ws *WebServer) snapshotStatuses() []events.ConnectionStatusEvent {
 		statuses = append(statuses, evt)
 	}
 
-	sort.Slice(statuses, func(i, j int) bool {
-		return statuses[i].Component < statuses[j].Component
+	slices.SortFunc(statuses, func(a, b events.ConnectionStatusEvent) int {
+		return strings.Compare(a.Component, b.Component)
 	})
 
 	return statuses
@@ -374,11 +376,7 @@ func (ws *WebServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	var plugElements []elem.Node
 
 	snapshot := ws.plugProvider.Snapshot()
-	var plugIDs []string
-	for id := range snapshot {
-		plugIDs = append(plugIDs, id)
-	}
-	sort.Strings(plugIDs)
+	plugIDs := slices.Sorted(maps.Keys(snapshot))
 
 	for _, id := range plugIDs {
 		item := snapshot[id]
@@ -506,11 +504,6 @@ func (ws *WebServer) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	// If HTMX request, return partial HTML
 	if r.Header.Get("HX-Request") == "true" {
 		// Fetch updated state immediately
-		if updatedPlug, updatedState, ok := ws.plugProvider.Plug(plugID); ok {
-			plug = updatedPlug
-			state = updatedState
-		}
-
 		if updatedPlug, updatedState, ok := ws.plugProvider.Plug(plugID); ok {
 			plug = updatedPlug
 			state = updatedState

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/kradalby/tasmota-go"
-	"github.com/kradalby/tasmota-homekit/events"
 	"tailscale.com/util/eventbus"
+
+	"github.com/kradalby/tasmota-homekit/events"
 )
 
 // Manager manages all Tasmota plug clients and their state.

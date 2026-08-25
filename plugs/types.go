@@ -54,12 +54,10 @@ func LoadConfig(path string) (*Config, error) {
 
 		// Set defaults for HomeKit and Web if not specified
 		if cfg.Plugs[i].HomeKit == nil {
-			defaultTrue := true
-			cfg.Plugs[i].HomeKit = &defaultTrue
+			cfg.Plugs[i].HomeKit = new(true)
 		}
 		if cfg.Plugs[i].Web == nil {
-			defaultTrue := true
-			cfg.Plugs[i].Web = &defaultTrue
+			cfg.Plugs[i].Web = new(true)
 		}
 	}
 

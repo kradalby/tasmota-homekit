@@ -7,8 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kradalby/tasmota-homekit/events"
 )
 
 type fakeClient struct {

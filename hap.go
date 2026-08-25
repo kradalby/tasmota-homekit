@@ -9,9 +9,10 @@ import (
 
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
+	"tailscale.com/util/eventbus"
+
 	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/kradalby/tasmota-homekit/plugs"
-	"tailscale.com/util/eventbus"
 )
 
 func hashString(s string) uint64 {
@@ -176,19 +177,11 @@ func NewHAPManager(
 			hm.publishCommand(plugID, on)
 		})
 
+		// The accessories are not added to the bridge here: GetAccessories
+		// hands the bridge and its children to hap.NewServer, which is what
+		// actually publishes them.
 		hm.accessories[plug.ID] = switchable
 		hm.accessoryOrder = append(hm.accessoryOrder, plug.ID)
-
-		// Add accessory to bridge
-		// Note: We need to access the underlying accessory.A to add it to the bridge
-		// Since we don't store it in the map, we do it here.
-		// However, HAP library usually requires adding accessories to the bridge or the server.
-		// The original code didn't explicitly add outlets to the bridge struct in NewHAPManager,
-		// but presumably they are added when the server starts or via `hm.bridge.AddA(outlet.A)`.
-		// Let's check how it was done. It seems they were just stored in `hm.outlets`.
-		// Ah, the `Start` method (which is not shown here but likely exists) probably iterates over the map.
-		// Wait, `accessory.NewBridge` creates a bridge, but we need to serve these accessories.
-		// Let's look at the `Start` method in `hap.go` later. For now, I'll just store them.
 	}
 
 	return hm

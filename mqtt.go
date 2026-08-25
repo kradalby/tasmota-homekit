@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kradalby/tasmota-homekit/plugs"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"tailscale.com/util/eventbus"
+
+	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
 // getLocalIP returns the local IP address to use for MQTT broker configuration
@@ -106,7 +107,7 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	// Parse payload to extract state
-	var msg map[string]interface{}
+	var msg map[string]any
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		slog.Debug("Failed to parse MQTT payload", "error", err)
 		return pk, nil
@@ -116,7 +117,7 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	var powerState string
 	if power, ok := msg["POWER"].(string); ok {
 		powerState = power
-	} else if result, ok := msg["StatusSTS"].(map[string]interface{}); ok {
+	} else if result, ok := msg["StatusSTS"].(map[string]any); ok {
 		if power, ok := result["POWER"].(string); ok {
 			powerState = power
 		}
@@ -142,11 +143,11 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	// Parse electrical stats from ENERGY field (from SENSOR telemetry)
-	var energy map[string]interface{}
-	if e, ok := msg["ENERGY"].(map[string]interface{}); ok {
+	var energy map[string]any
+	if e, ok := msg["ENERGY"].(map[string]any); ok {
 		energy = e
-	} else if sns, ok := msg["StatusSNS"].(map[string]interface{}); ok {
-		if e, ok := sns["ENERGY"].(map[string]interface{}); ok {
+	} else if sns, ok := msg["StatusSNS"].(map[string]any); ok {
+		if e, ok := sns["ENERGY"].(map[string]any); ok {
 			energy = e
 		}
 	}
@@ -190,7 +191,7 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 	if _, ok := msg["ENERGY"]; ok {
 		updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
-	} else if sns, ok := msg["StatusSNS"].(map[string]interface{}); ok {
+	} else if sns, ok := msg["StatusSNS"].(map[string]any); ok {
 		if _, ok := sns["ENERGY"]; ok {
 			updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
 		}

@@ -6,10 +6,11 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/kradalby/tasmota-homekit/events"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"tailscale.com/util/eventbus"
+
+	"github.com/kradalby/tasmota-homekit/events"
 )
 
 // Collector subscribes to eventbus updates and exposes Prometheus metrics.
