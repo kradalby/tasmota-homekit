@@ -149,7 +149,7 @@
     // {
       nixosModules.default = import ./nix/module.nix;
       overlays.default = final: prev: {
-        tasmota-homekit = self.packages.${final.system}.default;
+        tasmota-homekit = self.packages.${final.stdenv.hostPlatform.system}.default;
       };
     };
 }
