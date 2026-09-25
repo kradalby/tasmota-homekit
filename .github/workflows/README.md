@@ -25,7 +25,7 @@ This repository uses a single workflow, `.github/workflows/ci.yml`, triggered on
 Every job:
 
 - Checks out the repo.
-- Installs Nix via `NixOS/nix-installer-action` and warms the Nix store cache via `Mic92/hestia/action`.
+- Installs Nix via `NixOS/nix-installer-action` and warms the Nix store cache via `Mic92/hestia`.
 
 A workflow-level default shell (`nix develop --command bash`) runs every step
 inside the flake devShell, so tools are available without a per-step prefix. A
