@@ -90,6 +90,7 @@
         apps = {
           test = {
             type = "app";
+            meta.description = "Run go test";
             program = toString (
               pkgs.writeShellScript "test" ''
                 set -euo pipefail
@@ -101,6 +102,7 @@
 
           lint = {
             type = "app";
+            meta.description = "Run golangci-lint";
             program = toString (
               pkgs.writeShellScript "lint" ''
                 set -euo pipefail
@@ -112,6 +114,7 @@
 
           test-race = {
             type = "app";
+            meta.description = "Run go test with the race detector";
             program = toString (
               pkgs.writeShellScript "test-race" ''
                 set -euo pipefail
@@ -123,6 +126,7 @@
 
           coverage = {
             type = "app";
+            meta.description = "Generate an HTML coverage report";
             program = toString (
               pkgs.writeShellScript "coverage" ''
                 set -euo pipefail
