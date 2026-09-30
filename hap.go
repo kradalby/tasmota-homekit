@@ -25,9 +25,11 @@ func hashString(s string) uint64 {
 // the plug until it answers.
 const hapWriteTimeout = 5 * time.Second
 
-// powerSetter switches a plug and returns once the plug has answered.
-type powerSetter interface {
+// hapPlugs is the part of plugs.Manager HomeKit uses.
+type hapPlugs interface {
+	// SetPower switches a plug and returns once the plug has answered.
 	SetPower(ctx context.Context, plugID string, on bool) error
+	Plug(plugID string) (plugs.Plug, plugs.State, bool)
 }
 
 // Switchable is an interface for accessories that can be turned on/off
@@ -85,7 +87,7 @@ type HAPManager struct {
 	bridge          *accessory.Bridge
 	accessories     map[string]Switchable
 	accessoryOrder  []string
-	power           powerSetter
+	manager         hapPlugs
 	stateSubscriber *eventbus.Subscriber[events.StateUpdateEvent]
 	eventBus        *events.Bus
 	eventClient     *eventbus.Client
@@ -104,7 +106,7 @@ type HAPManager struct {
 func NewHAPManager(
 	plugConfigs []plugs.Plug,
 	bridgeName string,
-	power powerSetter,
+	pm hapPlugs,
 	bus *events.Bus,
 ) *HAPManager {
 	client, err := bus.Client(events.ClientHAP)
@@ -124,7 +126,7 @@ func NewHAPManager(
 		bridge:          bridge,
 		accessories:     make(map[string]Switchable),
 		accessoryOrder:  make([]string, 0, len(plugConfigs)),
-		power:           power,
+		manager:         pm,
 		stateSubscriber: eventbus.Subscribe[events.StateUpdateEvent](client),
 		eventBus:        bus,
 		eventClient:     client,
@@ -179,13 +181,19 @@ func NewHAPManager(
 			ctx, cancel := context.WithTimeout(context.Background(), hapWriteTimeout)
 			defer cancel()
 
-			if err := hm.power.SetPower(ctx, plugID, on); err != nil {
+			if err := hm.manager.SetPower(ctx, plugID, on); err != nil {
 				slog.Error("HomeKit command failed", "plug_id", plugID, "error", err)
 				return err
 			}
 
 			return nil
 		})
+
+		// Changes stored before stateSubscriber existed were never
+		// published to it; later ones will be.
+		if _, state, ok := pm.Plug(plug.ID); ok {
+			switchable.SetOn(state.On)
+		}
 
 		// The accessories are not added to the bridge here: GetAccessories
 		// hands the bridge and its children to hap.NewServer, which is what
