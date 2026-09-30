@@ -190,10 +190,9 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 
 	slog.Debug("Raw Tasmota Status response", "plug_id", plugID, "response", string(response))
 
+	// Status.Power is left out: its encoding differs between firmware
+	// versions, and StatusSTS.POWER carries the same bit.
 	var statusResp struct {
-		Status struct {
-			Power int `json:"Power"`
-		} `json:"Status"`
 		StatusSTS struct {
 			Power string `json:"POWER"`
 		} `json:"StatusSTS"`
@@ -207,34 +206,18 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 		} `json:"StatusSNS"`
 	}
 
+	if err := json.Unmarshal(response, &statusResp); err != nil {
+		return nil, fmt.Errorf("failed to parse status: %w", err)
+	}
+	if statusResp.StatusSTS.Power == "" {
+		return nil, fmt.Errorf("status has no StatusSTS.POWER")
+	}
+
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	if err := json.Unmarshal(response, &statusResp); err != nil {
-		// Fallback for simple POWER response
-		var altResp struct {
-			Power string `json:"POWER"`
-		}
-		if err2 := json.Unmarshal(response, &altResp); err2 == nil {
-			state := pm.states[plugID]
-			state.On = altResp.Power == "ON"
-			state.LastUpdated = time.Now()
-			copy := *state
-			return &copy, nil
-		}
-		return nil, fmt.Errorf("failed to parse status: %w", err)
-	}
-
 	state := pm.states[plugID]
-
-	// Update Power State (prefer StatusSTS, fallback to Status)
-	if statusResp.StatusSTS.Power != "" {
-		state.On = statusResp.StatusSTS.Power == "ON"
-	} else {
-		state.On = statusResp.Status.Power == 1
-	}
-
-	// Update Energy Stats
+	state.On = statusResp.StatusSTS.Power == "ON"
 	state.Power = statusResp.StatusSNS.Energy.Power
 	state.Voltage = statusResp.StatusSNS.Energy.Voltage
 	state.Current = statusResp.StatusSNS.Energy.Current

@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"tailscale.com/util/eventbus"
 
 	"github.com/kradalby/tasmota-homekit/events"
 )
@@ -87,4 +89,65 @@ func TestConfigureMQTTBacklog(t *testing.T) {
 	require.Contains(t, fake.backlog, "MqttHost host")
 	require.Contains(t, fake.backlog, "MqttPort 1234")
 	require.Contains(t, fake.backlog, "Topic tasmota/plug-1")
+}
+
+// Current Tasmota sends Status.Power as a bitmask string ("1"); the reply must
+// still be read, and what it changes must reach subscribers.
+func TestGetStatusIgnoresStatusPowerEncoding(t *testing.T) {
+	pm, fake, _ := newTestManager(t)
+
+	client, err := pm.eventBus.Client(events.ClientWeb)
+	require.NoError(t, err)
+	sub := eventbus.Subscribe[events.StateUpdateEvent](client)
+	t.Cleanup(sub.Close)
+
+	fake.responses = [][]byte{[]byte(`{
+		"Status":{"Module":0,"Power":"1"},
+		"StatusSNS":{"ENERGY":{"Total":1.5,"Power":42,"Voltage":230,"Current":0.18}},
+		"StatusSTS":{"POWER":"ON"}
+	}`)}
+
+	got, err := pm.GetStatus(context.Background(), "plug-1")
+	require.NoError(t, err)
+	require.True(t, got.On)
+	require.InDelta(t, 42, got.Power, 0.001)
+
+	_, state, ok := pm.Plug("plug-1")
+	require.True(t, ok)
+	require.True(t, state.On)
+	require.InDelta(t, 230, state.Voltage, 0.001)
+	require.InDelta(t, 0.18, state.Current, 0.001)
+	require.InDelta(t, 1.5, state.Energy, 0.001)
+
+	// The initial event from NewManager may still be in flight; skip it.
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case evt := <-sub.Events():
+			if evt.On {
+				require.InDelta(t, 42, evt.Power, 0.001)
+				return
+			}
+		case <-timeout:
+			t.Fatal("status change was not published")
+		}
+	}
+}
+
+func TestGetStatusWithoutPowerLeavesStateAlone(t *testing.T) {
+	pm, fake, _ := newTestManager(t)
+
+	fake.responses = [][]byte{
+		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
+		[]byte(`{"StatusSTS":{"POWER1":"OFF"}}`),
+	}
+
+	_, err := pm.GetStatus(context.Background(), "plug-1")
+	require.NoError(t, err)
+
+	_, err = pm.GetStatus(context.Background(), "plug-1")
+	require.Error(t, err)
+
+	_, state, _ := pm.Plug("plug-1")
+	require.True(t, state.On)
 }
