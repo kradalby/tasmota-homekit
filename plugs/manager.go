@@ -188,6 +188,7 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 		return nil, fmt.Errorf("plug %s not found", plugID)
 	}
 
+	sent := time.Now()
 	response, err := info.Client.ExecuteCommand(ctx, "Status 0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get status: %w", err)
@@ -201,7 +202,7 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	}
 
 	state, _ := pm.update("status", plugID, func(s State) State {
-		return applyStatus(s, reading, time.Now())
+		return applyStatus(s, reading, sent, time.Now())
 	})
 
 	return &state, nil
@@ -209,11 +210,8 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 
 // statusReading is what a Status 0 reply says about a plug.
 type statusReading struct {
-	On      bool
-	Power   float64
-	Voltage float64
-	Current float64
-	Energy  float64
+	On     bool
+	Energy Energy
 }
 
 func parseStatus(response []byte) (statusReading, error) {
@@ -224,12 +222,7 @@ func parseStatus(response []byte) (statusReading, error) {
 			Power string `json:"POWER"`
 		} `json:"StatusSTS"`
 		StatusSNS struct {
-			Energy struct {
-				Power   float64 `json:"Power"`
-				Voltage float64 `json:"Voltage"`
-				Current float64 `json:"Current"`
-				Total   float64 `json:"Total"`
-			} `json:"ENERGY"`
+			Energy Energy `json:"ENERGY"`
 		} `json:"StatusSNS"`
 	}
 
@@ -240,24 +233,53 @@ func parseStatus(response []byte) (statusReading, error) {
 		return statusReading{}, fmt.Errorf("status has no StatusSTS.POWER")
 	}
 
-	energy := statusResp.StatusSNS.Energy
 	return statusReading{
-		On:      statusResp.StatusSTS.Power == "ON",
-		Power:   energy.Power,
-		Voltage: energy.Voltage,
-		Current: energy.Current,
-		Energy:  energy.Total,
+		On:     statusResp.StatusSTS.Power == "ON",
+		Energy: statusResp.StatusSNS.Energy,
 	}, nil
 }
 
-func applyStatus(s State, r statusReading, now time.Time) State {
-	s.On = r.On
-	s.Power = r.Power
-	s.Voltage = r.Voltage
-	s.Current = r.Current
-	s.Energy = r.Energy
-	s.LastUpdated = now
+// applyStatus folds a reply to a status request sent at sent into s. The
+// reply shows the plug no earlier than sent, so sent is when it was observed.
+func applyStatus(s State, r statusReading, sent, now time.Time) State {
+	if s.observe(sent, &r.On, &r.Energy) {
+		s.LastUpdated = latest(s.LastUpdated, now)
+	}
 	return s
+}
+
+// mergeEvent folds an MQTT report into s.
+func mergeEvent(s State, event StateChangedEvent) State {
+	s.observe(event.Received, event.On, event.Energy)
+	s.MQTTConnected = true
+	s.LastSeen = latest(s.LastSeen, event.Received)
+	s.LastUpdated = latest(s.LastUpdated, event.Received)
+	return s
+}
+
+// observe stores on and e, where given, unless s holds a reading of the same
+// kind observed after at: MQTT reports queue on the eventbus and status
+// requests overlap, so readings arrive out of order. It reports whether
+// anything was stored.
+func (s *State) observe(at time.Time, on *bool, e *Energy) bool {
+	stored := false
+	if on != nil && !s.onAt.After(at) {
+		s.On, s.onAt = *on, at
+		stored = true
+	}
+	if e != nil && !s.energyAt.After(at) {
+		s.Power, s.Voltage, s.Current, s.Energy = e.Power, e.Voltage, e.Current, e.Total
+		s.energyAt = at
+		stored = true
+	}
+	return stored
+}
+
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // RefreshAll triggers a status update for all plugs concurrently.
@@ -325,51 +347,6 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 			return
 		}
 	}
-}
-
-// mergeEvent returns s with the fields event carries.
-func mergeEvent(s State, event StateChangedEvent) State {
-	if len(event.UpdatedFields) == 0 {
-		// Fallback for legacy events or internal updates
-		if !event.State.LastSeen.IsZero() {
-			s.LastSeen = event.State.LastSeen
-			s.MQTTConnected = event.State.MQTTConnected
-		}
-
-		if !event.State.LastUpdated.IsZero() {
-			s.LastUpdated = event.State.LastUpdated
-			s.On = event.State.On
-			s.Power = event.State.Power
-			s.Voltage = event.State.Voltage
-			s.Current = event.State.Current
-			s.Energy = event.State.Energy
-		}
-
-		return s
-	}
-
-	for _, field := range event.UpdatedFields {
-		switch field {
-		case "On":
-			s.On = event.State.On
-		case "Power":
-			s.Power = event.State.Power
-		case "Voltage":
-			s.Voltage = event.State.Voltage
-		case "Current":
-			s.Current = event.State.Current
-		case "Energy":
-			s.Energy = event.State.Energy
-		case "MQTTConnected":
-			s.MQTTConnected = event.State.MQTTConnected
-		case "LastSeen":
-			s.LastSeen = event.State.LastSeen
-		case "LastUpdated":
-			s.LastUpdated = event.State.LastUpdated
-		}
-	}
-
-	return s
 }
 
 // update replaces plugID's state with f's result. The new snapshot is

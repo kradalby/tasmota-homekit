@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mochi-mqtt/server/v2/packets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"tailscale.com/util/eventbus"
@@ -33,10 +34,16 @@ type TestStateSyncEnvironment struct {
 type fakePlugClient struct {
 	lastCmd   string
 	responses [][]byte
+
+	// beforeReply, if set, runs before each command is answered.
+	beforeReply func(cmd string)
 }
 
 func (f *fakePlugClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, error) {
 	f.lastCmd = cmd
+	if f.beforeReply != nil {
+		f.beforeReply(cmd)
+	}
 	if len(f.responses) > 0 {
 		resp := f.responses[0]
 		f.responses = f.responses[1:]
@@ -128,15 +135,9 @@ func (env *TestStateSyncEnvironment) simulateMQTTUpdate(plugID string, on bool) 
 	pub := eventbus.Publish[plugs.StateChangedEvent](client)
 
 	pub.Publish(plugs.StateChangedEvent{
-		PlugID: plugID,
-		State: plugs.State{
-			ID:            plugID,
-			On:            on,
-			MQTTConnected: true,
-			LastSeen:      time.Now(),
-			LastUpdated:   time.Now(),
-		},
-		UpdatedFields: []string{"On", "MQTTConnected", "LastSeen", "LastUpdated"},
+		PlugID:   plugID,
+		Received: time.Now(),
+		On:       &on,
 	})
 }
 
@@ -423,4 +424,91 @@ func TestStatePublishedInMutationOrder(t *testing.T) {
 	require.Eventually(t, func() bool { return env.getHAPState("plug-2") }, 2*time.Second, 10*time.Millisecond)
 
 	env.assertAllStatesMatch("plug-1", false, "HTTP OFF was stored last")
+}
+
+// A status reply already in flight when a newer MQTT update lands must not
+// overwrite it.
+func TestStaleStatusReplyDropped(t *testing.T) {
+	env := setupStateSyncTest(t, []plugs.Plug{
+		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
+	})
+
+	env.simulateMQTTUpdate("plug-1", true)
+	env.assertAllStatesMatch("plug-1", true)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	env.fakeClient.responses = [][]byte{
+		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
+	}
+	env.fakeClient.beforeReply = func(string) {
+		close(started)
+		<-release
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = env.manager.GetStatus(env.ctx, "plug-1")
+	}()
+	<-started
+
+	env.simulateMQTTUpdate("plug-1", false)
+	env.assertAllStatesMatch("plug-1", false)
+
+	close(release)
+	<-done
+
+	env.assertAllStatesMatch("plug-1", false, "stale status reply won")
+}
+
+// An MQTT report held up in the hook after it arrived must not be ordered
+// after a status reply requested meanwhile.
+func TestMQTTReportStampedOnArrival(t *testing.T) {
+	env := setupStateSyncTest(t, []plugs.Plug{
+		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
+	})
+	env.fakeClient.responses = [][]byte{
+		[]byte(`{"StatusSTS":{"POWER":"OFF"}}`),
+	}
+
+	client, err := env.eventBus.Client(events.ClientMQTT)
+	require.NoError(t, err)
+	hook := &MQTTHook{statePublisher: eventbus.Publish[plugs.StateChangedEvent](client)}
+
+	gate := &gateLog{
+		msg:     "MQTT message received",
+		hit:     make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(gate))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = hook.OnPublish(nil, packets.Packet{
+			TopicName: "stat/tasmota/plug-1/RESULT",
+			Payload:   []byte(`{"POWER":"ON"}`),
+		})
+	}()
+	select {
+	case <-gate.hit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hook never logged the report")
+	}
+
+	_, err = env.manager.GetStatus(env.ctx, "plug-1")
+	require.NoError(t, err)
+
+	close(gate.release)
+	<-done
+
+	require.Eventually(t, func() bool {
+		_, s, _ := env.manager.Plug("plug-1")
+		return s.MQTTConnected
+	}, 2*time.Second, 10*time.Millisecond, "MQTT report never merged")
+
+	env.assertAllStatesMatch("plug-1", false, "held MQTT report overwrote newer status reply")
 }

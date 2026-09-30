@@ -77,7 +77,10 @@ func (h *MQTTHook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
 
 // OnPublish is called when a message is received from a client
 func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {
-	// Process messages from Tasmota devices
+	// Stamp before anything that can block, such as logging: a later stamp
+	// could order this report after a status reply requested meanwhile.
+	received := time.Now()
+
 	topic := pk.TopicName
 	payload := pk.Payload
 
@@ -123,22 +126,18 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 		}
 	}
 
-	// Create partial state update with the information we have from MQTT
-	now := time.Now()
-	partialState := plugs.State{
-		ID:            plugID,
-		MQTTConnected: true,
-		LastSeen:      now,
-		LastUpdated:   now,
+	event := plugs.StateChangedEvent{
+		PlugID:   plugID,
+		Received: received,
 	}
 
-	// Update power state if present
 	if powerState != "" {
-		partialState.On = powerState == "ON"
+		on := powerState == "ON"
+		event.On = &on
 		slog.Info(
 			"Plug state updated from MQTT",
 			"plug_id", plugID,
-			"on", partialState.On,
+			"on", on,
 		)
 	}
 
@@ -153,57 +152,41 @@ func (h *MQTTHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet
 	}
 
 	if energy != nil {
+		var e plugs.Energy
 		if power, ok := energy["Power"].(float64); ok {
-			partialState.Power = power
+			e.Power = power
 		}
 		if voltage, ok := energy["Voltage"].(float64); ok {
-			partialState.Voltage = voltage
+			e.Voltage = voltage
 		}
 		if current, ok := energy["Current"].(float64); ok {
-			partialState.Current = current
+			e.Current = current
 		}
 		if total, ok := energy["Total"].(float64); ok {
-			partialState.Energy = total
+			e.Total = total
 		}
+		event.Energy = &e
 
 		slog.Debug(
 			"Electrical stats updated from MQTT",
 			"plug_id", plugID,
-			"power", partialState.Power,
-			"voltage", partialState.Voltage,
-			"current", partialState.Current,
-			"energy", partialState.Energy,
+			"power", e.Power,
+			"voltage", e.Voltage,
+			"current", e.Current,
+			"energy", e.Total,
 		)
 	}
 
-	if powerState == "" && partialState.Power == 0 && partialState.Voltage == 0 {
+	if event.On == nil && event.Energy == nil {
 		slog.Debug(
 			"Plug connection tracked via MQTT",
 			"plug_id", plugID,
-			"last_seen", partialState.LastSeen,
+			"last_seen", event.Received,
 		)
 	}
 
-	// Publish to eventbus - PlugManager will merge with its state
-	var updatedFields []string
-	if powerState != "" {
-		updatedFields = append(updatedFields, "On")
-	}
-	if _, ok := msg["ENERGY"]; ok {
-		updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
-	} else if sns, ok := msg["StatusSNS"].(map[string]any); ok {
-		if _, ok := sns["ENERGY"]; ok {
-			updatedFields = append(updatedFields, "Power", "Voltage", "Current", "Energy")
-		}
-	}
-	// Always update connectivity fields
-	updatedFields = append(updatedFields, "MQTTConnected", "LastSeen", "LastUpdated")
-
-	h.statePublisher.Publish(plugs.StateChangedEvent{
-		PlugID:        plugID,
-		State:         partialState,
-		UpdatedFields: updatedFields,
-	})
+	// PlugManager merges the report into its state.
+	h.statePublisher.Publish(event)
 
 	return pk, nil
 }

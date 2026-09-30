@@ -152,6 +152,53 @@ func TestGetStatusWithoutPowerLeavesStateAlone(t *testing.T) {
 	require.True(t, state.On)
 }
 
+// heldClient hands each command's reply channel to the test, which answers
+// it when it chooses.
+type heldClient struct {
+	calls chan chan []byte
+}
+
+func (c *heldClient) ExecuteCommand(context.Context, string) ([]byte, error) {
+	reply := make(chan []byte)
+	c.calls <- reply
+	return <-reply, nil
+}
+
+func (c *heldClient) ExecuteBacklog(context.Context, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+// Two status requests overlap and the older one answers last: its reply
+// must not replace the newer one.
+func TestOlderStatusReplyDropped(t *testing.T) {
+	pm, _, _ := newTestManager(t)
+	held := &heldClient{calls: make(chan chan []byte)}
+	pm.plugs["plug-1"].Client = held
+
+	ctx := context.Background()
+
+	older := make(chan struct{})
+	go func() {
+		defer close(older)
+		_, _ = pm.GetStatus(ctx, "plug-1")
+	}()
+	olderReply := <-held.calls
+
+	newer := make(chan struct{})
+	go func() {
+		defer close(newer)
+		_, _ = pm.GetStatus(ctx, "plug-1")
+	}()
+	(<-held.calls) <- []byte(`{"StatusSTS":{"POWER":"ON"}}`)
+	<-newer
+
+	olderReply <- []byte(`{"StatusSTS":{"POWER":"OFF"}}`)
+	<-older
+
+	_, state, _ := pm.Plug("plug-1")
+	require.True(t, state.On, "older status reply won")
+}
+
 // update publishes while holding mu, so a subscriber that stops reading
 // must not hold up later changes.
 func TestStalledSubscriberDoesNotBlockUpdates(t *testing.T) {
@@ -184,4 +231,62 @@ func TestStalledSubscriberDoesNotBlockUpdates(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("updates blocked behind a stalled subscriber")
 	}
+}
+
+// An MQTT report waits on the eventbus while a status request sent after it
+// is answered and stored. Merging the report late must not undo the newer
+// reply or move its timestamps backward.
+func TestQueuedMQTTReportOlderThanStatusDropped(t *testing.T) {
+	pm, fake, _ := newTestManager(t)
+
+	client, err := pm.eventBus.Client(events.ClientMQTT)
+	require.NoError(t, err)
+	pub := eventbus.Publish[StateChangedEvent](client)
+
+	// ProcessStateEvents is not running, so the report stays queued.
+	received := time.Now().Add(-time.Second)
+	on := true
+	pub.Publish(StateChangedEvent{
+		PlugID:   "plug-1",
+		Received: received,
+		On:       &on,
+		Energy:   &Energy{Power: 40, Voltage: 230, Current: 0.17, Total: 1},
+	})
+
+	fake.responses = [][]byte{[]byte(`{
+		"StatusSTS":{"POWER":"OFF"},
+		"StatusSNS":{"ENERGY":{"Power":0,"Voltage":231,"Current":0,"Total":1.1}}
+	}`)}
+	_, err = pm.GetStatus(context.Background(), "plug-1")
+	require.NoError(t, err)
+	_, replied, _ := pm.Plug("plug-1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go pm.ProcessStateEvents(ctx)
+
+	require.Eventually(t, func() bool {
+		_, s, _ := pm.Plug("plug-1")
+		return s.MQTTConnected
+	}, time.Second, time.Millisecond, "MQTT report never merged")
+
+	_, state, _ := pm.Plug("plug-1")
+	require.False(t, state.On, "queued MQTT report undid a newer status reply")
+	require.Zero(t, state.Power)
+	require.InDelta(t, 231, state.Voltage, 0.001)
+	require.Equal(t, received, state.LastSeen)
+	require.Equal(t, replied.LastUpdated, state.LastUpdated, "LastUpdated moved backward")
+}
+
+// Power state and energy are ordered apart: an MQTT power report newer than
+// a status request does not make the reply's energy sample stale.
+func TestStatusEnergyKeptPastNewerPowerReport(t *testing.T) {
+	sent := time.Now()
+	off := false
+
+	s := mergeEvent(State{}, StateChangedEvent{Received: sent.Add(time.Second), On: &off})
+	s = applyStatus(s, statusReading{On: true, Energy: Energy{Power: 40}}, sent, sent.Add(2*time.Second))
+
+	require.False(t, s.On)
+	require.InDelta(t, 40, s.Power, 0.001)
 }

@@ -94,13 +94,31 @@ type State struct {
 	LastUpdated   time.Time
 	MQTTConnected bool
 	LastSeen      time.Time
+
+	// onAt and energyAt are when the stored power state and energy sample
+	// were observed. They are kept apart because MQTT reports carry one or
+	// the other; a reading observed earlier than the stored one is stale.
+	onAt     time.Time
+	energyAt time.Time
 }
 
-// StateChangedEvent is emitted when a plug's state changes.
+// StateChangedEvent is a report a plug sent over MQTT. On and Energy are nil
+// when the report does not carry them.
 type StateChangedEvent struct {
-	PlugID        string
-	State         State
-	UpdatedFields []string
+	PlugID string
+	// Received orders the report against status replies: it can queue on
+	// the eventbus until after a newer reply is stored.
+	Received time.Time
+	On       *bool
+	Energy   *Energy
+}
+
+// Energy is one ENERGY sample; its values are measured together.
+type Energy struct {
+	Power   float64 // Watts
+	Voltage float64 // Volts
+	Current float64 // Amperes
+	Total   float64 // kWh
 }
 
 // CommandEvent requests a plug command.

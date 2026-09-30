@@ -36,8 +36,8 @@ func TestMQTTHookPublishesPowerState(t *testing.T) {
 		if evt.PlugID != "plug-1" {
 			t.Fatalf("unexpected plug id: %s", evt.PlugID)
 		}
-		if !evt.State.On {
-			t.Fatalf("expected state.On true, got false")
+		if evt.On == nil || !*evt.On {
+			t.Fatalf("expected On true, got %v", evt.On)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected state event")
@@ -70,8 +70,8 @@ func TestMQTTHookParsesTelemetryState(t *testing.T) {
 		if evt.PlugID != "plug-2" {
 			t.Fatalf("unexpected plug id: %s", evt.PlugID)
 		}
-		if evt.State.On {
-			t.Fatalf("expected OFF state")
+		if evt.On == nil || *evt.On {
+			t.Fatalf("expected OFF state, got %v", evt.On)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected event from telemetry topic")
