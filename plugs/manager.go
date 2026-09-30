@@ -26,7 +26,6 @@ type Manager struct {
 	mu     sync.Mutex
 	states atomic.Pointer[map[string]State]
 
-	commands         chan CommandEvent
 	statePublisher   *eventbus.Publisher[StateChangedEvent]
 	errorPublisher   *eventbus.Publisher[ErrorEvent]
 	stateSubscriber  *eventbus.Subscriber[StateChangedEvent]
@@ -61,7 +60,6 @@ func (c *tasmotaClient) ExecuteBacklog(ctx context.Context, cmds ...string) ([]b
 // NewManager creates a new plug manager.
 func NewManager(
 	plugConfigs []Plug,
-	commands chan CommandEvent,
 	bus *events.Bus,
 ) (*Manager, error) {
 	client, err := bus.Client(events.ClientPlugManager)
@@ -71,7 +69,6 @@ func NewManager(
 
 	pm := &Manager{
 		plugs:            make(map[string]*Info),
-		commands:         commands,
 		statePublisher:   eventbus.Publish[StateChangedEvent](client),
 		errorPublisher:   eventbus.Publish[ErrorEvent](client),
 		stateSubscriber:  eventbus.Subscribe[StateChangedEvent](client),
@@ -299,24 +296,6 @@ func (pm *Manager) RefreshAll(ctx context.Context) {
 		}(id)
 	}
 	wg.Wait()
-}
-
-// ProcessCommands handles command events.
-func (pm *Manager) ProcessCommands(ctx context.Context) {
-	for {
-		select {
-		case cmd := <-pm.commands:
-			if err := pm.SetPower(ctx, cmd.PlugID, cmd.On); err != nil {
-				slog.Error(
-					"Failed to process command",
-					"plug_id", cmd.PlugID,
-					"error", err,
-				)
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // ProcessStateEvents merges state change events from the eventbus.

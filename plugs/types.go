@@ -121,12 +121,6 @@ type Energy struct {
 	Total   float64 // kWh
 }
 
-// CommandEvent requests a plug command.
-type CommandEvent struct {
-	PlugID string
-	On     bool
-}
-
 // ErrorEvent is emitted when a plug encounters an error.
 type ErrorEvent struct {
 	PlugID string

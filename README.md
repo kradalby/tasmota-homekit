@@ -378,8 +378,8 @@ Features:
 Data Flow:
 ──────────
 Commands (Control) - Fast direct HTTP:
-  1. HomeKit → HAPManager → commands channel → PlugManager → HTTP → Tasmota
-  2. Web UI → WebServer → commands channel → PlugManager → HTTP → Tasmota
+  1. HomeKit → HAPManager → PlugManager.SetPower → HTTP → Tasmota
+  2. Web UI → WebServer → PlugManager.SetPower → HTTP → Tasmota
 
 State Updates (Reactive) - EventBus pub/sub pattern:
   3. Tasmota → MQTT → MQTTHook → eventbus.Publish(PlugStateChangedEvent)

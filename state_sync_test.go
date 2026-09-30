@@ -25,7 +25,6 @@ type TestStateSyncEnvironment struct {
 	hapManager *HAPManager
 	webServer  *WebServer
 	eventBus   *events.Bus
-	commands   chan plugs.CommandEvent
 	fakeClient *fakePlugClient
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -65,9 +64,7 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = eventBus.Close() })
 
-	commands := make(chan plugs.CommandEvent, 10)
-
-	manager, err := plugs.NewManager(plugConfigs, commands, eventBus)
+	manager, err := plugs.NewManager(plugConfigs, eventBus)
 	require.NoError(t, err)
 
 	// Replace client with fake for all plugs
@@ -76,14 +73,13 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 		manager.SetClientForTesting(cfg.ID, fake)
 	}
 
-	hapManager := NewHAPManager(plugConfigs, "Test Bridge", commands, manager, eventBus)
+	hapManager := NewHAPManager(plugConfigs, "Test Bridge", manager, eventBus)
 	webServer := NewWebServer(logger, manager, manager, eventBus, nil, "", "", hapManager)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	// Start background processors
-	go manager.ProcessCommands(ctx)
 	go manager.ProcessStateEvents(ctx)
 	go hapManager.ProcessStateChanges(ctx)
 	go webServer.processStateChanges(ctx)
@@ -94,7 +90,6 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 		hapManager: hapManager,
 		webServer:  webServer,
 		eventBus:   eventBus,
-		commands:   commands,
 		fakeClient: fake,
 		ctx:        ctx,
 		cancel:     cancel,
@@ -256,11 +251,7 @@ func TestHomeKitCommandSyncsToWeb(t *testing.T) {
 		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
 	}
 
-	// Simulate HomeKit sending command
-	env.commands <- plugs.CommandEvent{
-		PlugID: "plug-1",
-		On:     true,
-	}
+	require.Zero(t, homeKitWrite(env.hapManager, "plug-1", true))
 
 	// All views should show ON
 	env.assertAllStatesMatch("plug-1", true, "After HomeKit command, all views should show ON")

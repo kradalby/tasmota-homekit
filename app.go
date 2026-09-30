@@ -93,7 +93,6 @@ func Main() {
 		}
 	}()
 
-	commands := make(chan plugs.CommandEvent, 10)
 	appClient, err := eventBus.Client(events.ClientMetrics)
 	if err != nil {
 		slog.Error("Failed to get metrics client", "error", err)
@@ -123,7 +122,7 @@ func Main() {
 		os.Exit(1)
 	}
 
-	plugManager, err := plugs.NewManager(plugCfg.Plugs, commands, eventBus)
+	plugManager, err := plugs.NewManager(plugCfg.Plugs, eventBus)
 	if err != nil {
 		slog.Error("Failed to initialize plug manager", "error", err)
 		os.Exit(1)
@@ -184,7 +183,6 @@ func Main() {
 
 	slog.Info("MQTT broker started", "addr", cfg.MQTTAddrPort().String())
 
-	go plugManager.ProcessCommands(ctx)
 	go plugManager.ProcessStateEvents(ctx)
 
 	for _, plug := range plugCfg.Plugs {
@@ -230,7 +228,7 @@ func Main() {
 	go plugManager.MonitorConnections(ctx, localIP, int(cfg.MQTTAddrPort().Port()))
 	slog.Info("Connection monitoring started")
 
-	hapManager := NewHAPManager(plugCfg.Plugs, cfg.BridgeName, commands, plugManager, eventBus)
+	hapManager := NewHAPManager(plugCfg.Plugs, cfg.BridgeName, plugManager, eventBus)
 	hapManager.Start(ctx)
 	defer hapManager.Close()
 
