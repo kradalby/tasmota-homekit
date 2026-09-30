@@ -54,9 +54,7 @@ type WebServer struct {
 	client           *eventbus.Client
 	stateSubscriber  *eventbus.Subscriber[events.StateUpdateEvent]
 	statusSubscriber *eventbus.Subscriber[events.ConnectionStatusEvent]
-	currentState     map[string]events.StateUpdateEvent
 	connectionState  map[string]events.ConnectionStatusEvent
-	stateMu          sync.RWMutex
 	statusMu         sync.RWMutex
 	sseClients       map[chan events.StateUpdateEvent]struct{}
 	sseClientsMu     sync.RWMutex
@@ -86,7 +84,6 @@ func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controlle
 		client:           client,
 		stateSubscriber:  eventbus.Subscribe[events.StateUpdateEvent](client),
 		statusSubscriber: eventbus.Subscribe[events.ConnectionStatusEvent](client),
-		currentState:     make(map[string]events.StateUpdateEvent),
 		connectionState:  make(map[string]events.ConnectionStatusEvent),
 		sseClients:       make(map[chan events.StateUpdateEvent]struct{}),
 		hapPin:           hapPin,
@@ -181,10 +178,6 @@ func (ws *WebServer) processStateChanges(ctx context.Context) {
 	for {
 		select {
 		case event := <-ws.stateSubscriber.Events():
-			ws.stateMu.Lock()
-			ws.currentState[event.PlugID] = event
-			ws.stateMu.Unlock()
-
 			ws.logger.Debug("Web UI: State change received", "plug_id", event.PlugID, "on", event.On)
 			ws.broadcastSSE(event)
 		case <-ctx.Done():
@@ -220,19 +213,14 @@ func (ws *WebServer) broadcastSSE(event events.StateUpdateEvent) {
 }
 
 func (ws *WebServer) snapshotState() []events.StateUpdateEvent {
-	ws.stateMu.RLock()
-	defer ws.stateMu.RUnlock()
+	snapshot := ws.plugProvider.Snapshot()
 
-	snapshot := make([]events.StateUpdateEvent, 0, len(ws.currentState))
-	for _, evt := range ws.currentState {
-		snapshot = append(snapshot, evt)
+	out := make([]events.StateUpdateEvent, 0, len(snapshot))
+	for _, id := range slices.Sorted(maps.Keys(snapshot)) {
+		out = append(out, snapshot[id].State.Event("snapshot"))
 	}
 
-	slices.SortFunc(snapshot, func(a, b events.StateUpdateEvent) int {
-		return strings.Compare(a.PlugID, b.PlugID)
-	})
-
-	return snapshot
+	return out
 }
 
 func (ws *WebServer) snapshotStatuses() []events.ConnectionStatusEvent {

@@ -216,6 +216,12 @@ func TestHandleSSE(t *testing.T) {
 		close(done)
 	}()
 
+	// The snapshot is sent once the client is registered; anything
+	// published before that would not reach it.
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Contains(c, rec.body(), "\"plug_id\":\"plug-1\"", "missing snapshot")
+	}, time.Second, 20*time.Millisecond)
+
 	client, err := bus.Client(events.ClientPlugManager)
 	if err != nil {
 		t.Fatalf("bus.Client() error = %v", err)
@@ -229,9 +235,7 @@ func TestHandleSSE(t *testing.T) {
 	})
 
 	assert.EventuallyWithT(t, func(c *assert.CollectT) {
-		if !strings.Contains(rec.body(), "\"plug_id\":\"plug-1\"") {
-			assert.Fail(c, "missing SSE event")
-		}
+		assert.Contains(c, rec.body(), "\"on\":true", "missing SSE event")
 	}, time.Second, 20*time.Millisecond)
 
 	cancel()
@@ -337,29 +341,7 @@ func TestHandleQRCode(t *testing.T) {
 }
 
 func TestHandleEventBusDebug(t *testing.T) {
-	ws, _, _, bus := newTestWebServer(t)
-
-	ctx := t.Context()
-	ws.Start(ctx)
-
-	client, err := bus.Client(events.ClientPlugManager)
-	if err != nil {
-		t.Fatalf("bus.Client() error = %v", err)
-	}
-	bus.PublishStateUpdate(client, events.StateUpdateEvent{
-		PlugID:      "plug-1",
-		Name:        "Test Plug",
-		On:          true,
-		LastUpdated: time.Now(),
-		LastSeen:    time.Now(),
-	})
-
-	assert.EventuallyWithT(t, func(c *assert.CollectT) {
-		ws.stateMu.RLock()
-		defer ws.stateMu.RUnlock()
-		_, ok := ws.currentState["plug-1"]
-		assert.True(c, ok)
-	}, time.Second, 20*time.Millisecond)
+	ws, _, _, _ := newTestWebServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/eventbus", nil)
 	rec := httptest.NewRecorder()

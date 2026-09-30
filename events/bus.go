@@ -28,9 +28,7 @@ type Bus struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	lastStates map[string]StateUpdateEvent
-	stateMu    sync.Mutex
-	mu         sync.RWMutex
+	mu sync.RWMutex
 }
 
 // New constructs a new bus with the known clients registered.
@@ -42,12 +40,11 @@ func New(logger *slog.Logger) (*Bus, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &Bus{
-		bus:        eventbus.New(),
-		clients:    make(map[ClientName]*eventbus.Client),
-		logger:     logger,
-		ctx:        ctx,
-		cancel:     cancel,
-		lastStates: make(map[string]StateUpdateEvent),
+		bus:     eventbus.New(),
+		clients: make(map[ClientName]*eventbus.Client),
+		logger:  logger,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	for _, name := range []ClientName{
@@ -81,21 +78,8 @@ func (b *Bus) Client(name ClientName) (*eventbus.Client, error) {
 	return client, nil
 }
 
-// PublishStateUpdate emits a deduplicated state update event for SSE consumers.
+// PublishStateUpdate emits a state update event for HAP and SSE consumers.
 func (b *Bus) PublishStateUpdate(client *eventbus.Client, event StateUpdateEvent) {
-	b.stateMu.Lock()
-	defer b.stateMu.Unlock()
-
-	last, ok := b.lastStates[event.PlugID]
-	if ok && event.Equals(last) {
-		b.logger.Debug(
-			"skipping duplicate state update",
-			slog.String("plug_id", event.PlugID),
-			slog.String("source", event.Source),
-		)
-		return
-	}
-
 	b.logger.Debug(
 		"publishing state update",
 		slog.String("plug_id", event.PlugID),
@@ -106,8 +90,6 @@ func (b *Bus) PublishStateUpdate(client *eventbus.Client, event StateUpdateEvent
 	publisher := eventbus.Publish[StateUpdateEvent](client)
 	defer publisher.Close()
 	publisher.Publish(event)
-
-	b.lastStates[event.PlugID] = event
 }
 
 // PublishCommand emits a command event for metrics/debug consumers.
