@@ -103,7 +103,7 @@ func NewManager(
 
 	pm.states.Store(&states)
 	for _, plugConfig := range plugConfigs {
-		pm.publishStateUpdate("initial", plugConfig.ID, states[plugConfig.ID])
+		pm.publishStateUpdate("initial", states[plugConfig.ID])
 	}
 
 	return pm, nil
@@ -350,7 +350,7 @@ func (pm *Manager) update(source, plugID string, f func(State) State) (State, bo
 	states = maps.Clone(states)
 	states[plugID] = next
 	pm.states.Store(&states)
-	pm.publishStateUpdate(source, plugID, next)
+	pm.publishStateUpdate(source, next)
 
 	return next, true
 }
@@ -483,35 +483,34 @@ func (pm *Manager) Plug(plugID string) (Plug, State, bool) {
 	return info.Config, state, true
 }
 
-func (pm *Manager) publishStateUpdate(source, plugID string, state State) {
+func (pm *Manager) publishStateUpdate(source string, state State) {
 	if pm.eventBus == nil || pm.stateEventClient == nil {
 		return
 	}
 
-	info, ok := pm.plugs[plugID]
-	name := plugID
-	if ok {
-		name = info.Config.Name
-	}
+	pm.eventBus.PublishStateUpdate(pm.stateEventClient, state.Event(source))
+}
 
-	connectionState, connectionNote := connectionStatus(state.LastSeen)
+// Event renders s as the update web and HAP subscribers receive.
+func (s State) Event(source string) events.StateUpdateEvent {
+	connectionState, connectionNote := connectionStatus(s.LastSeen)
 
-	pm.eventBus.PublishStateUpdate(pm.stateEventClient, events.StateUpdateEvent{
+	return events.StateUpdateEvent{
 		Timestamp:       time.Now(),
 		Source:          source,
-		PlugID:          plugID,
-		Name:            name,
-		On:              state.On,
-		Power:           state.Power,
-		Voltage:         state.Voltage,
-		Current:         state.Current,
-		Energy:          state.Energy,
-		MQTTConnected:   state.MQTTConnected,
-		LastSeen:        state.LastSeen,
-		LastUpdated:     state.LastUpdated,
+		PlugID:          s.ID,
+		Name:            s.Name,
+		On:              s.On,
+		Power:           s.Power,
+		Voltage:         s.Voltage,
+		Current:         s.Current,
+		Energy:          s.Energy,
+		MQTTConnected:   s.MQTTConnected,
+		LastSeen:        s.LastSeen,
+		LastUpdated:     s.LastUpdated,
 		ConnectionState: connectionState,
 		ConnectionNote:  connectionNote,
-	})
+	}
 }
 
 func connectionStatus(lastSeen time.Time) (string, string) {

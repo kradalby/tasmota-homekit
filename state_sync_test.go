@@ -28,6 +28,9 @@ type TestStateSyncEnvironment struct {
 	fakeClient *fakePlugClient
 	ctx        context.Context
 	cancel     context.CancelFunc
+
+	webMu   sync.Mutex
+	webView map[string]events.StateUpdateEvent
 }
 
 type fakePlugClient struct {
@@ -84,7 +87,7 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 	go hapManager.ProcessStateChanges(ctx)
 	go webServer.processStateChanges(ctx)
 
-	return &TestStateSyncEnvironment{
+	env := &TestStateSyncEnvironment{
 		t:          t,
 		manager:    manager,
 		hapManager: hapManager,
@@ -94,6 +97,32 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 		ctx:        ctx,
 		cancel:     cancel,
 	}
+
+	// Watch the web view the way a browser does: current snapshot first,
+	// then the SSE stream.
+	sse := make(chan events.StateUpdateEvent, 100)
+	webServer.sseClientsMu.Lock()
+	webServer.sseClients[sse] = struct{}{}
+	webServer.sseClientsMu.Unlock()
+
+	env.webView = make(map[string]events.StateUpdateEvent)
+	for _, evt := range webServer.snapshotState() {
+		env.webView[evt.PlugID] = evt
+	}
+	go func() {
+		for {
+			select {
+			case evt := <-sse:
+				env.webMu.Lock()
+				env.webView[evt.PlugID] = evt
+				env.webMu.Unlock()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return env
 }
 
 // getHAPState returns the current state of a plug as seen by HomeKit
@@ -105,15 +134,9 @@ func (env *TestStateSyncEnvironment) getHAPState(plugID string) bool {
 
 // getWebState returns the current state of a plug as seen by Web UI
 func (env *TestStateSyncEnvironment) getWebState(plugID string) bool {
-	env.webServer.stateMu.RLock()
-	defer env.webServer.stateMu.RUnlock()
-	state, ok := env.webServer.currentState[plugID]
-	if !ok {
-		// Fall back to manager state if not in web cache yet
-		_, managerState, _ := env.manager.Plug(plugID)
-		return managerState.On
-	}
-	return state.On
+	env.webMu.Lock()
+	defer env.webMu.Unlock()
+	return env.webView[plugID].On
 }
 
 // getManagerState returns the current state from the manager (source of truth)
