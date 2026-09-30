@@ -19,6 +19,15 @@ import (
 	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
+// noPlugs stands in for a manager that knows no plugs.
+type noPlugs struct{}
+
+func (noPlugs) SetPower(context.Context, string, bool) error { return nil }
+
+func (noPlugs) Plug(string) (plugs.Plug, plugs.State, bool) {
+	return plugs.Plug{}, plugs.State{}, false
+}
+
 func newTestEventsBus(t *testing.T) *events.Bus {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -36,7 +45,7 @@ func TestHAPManagerUpdateState(t *testing.T) {
 	}}
 
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
 	}
@@ -58,7 +67,7 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 		Address: "1.2.3.4",
 	}}
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 	ctx := t.Context()
 
 	hm.Start(ctx)
@@ -82,7 +91,7 @@ func TestHAPManagerExposesAccessories(t *testing.T) {
 		Address: "1.2.3.4",
 	}}
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 
 	acc := hm.GetAccessories()
 	if len(acc) != 2 {
@@ -103,7 +112,7 @@ func TestHAPManagerAccessoryOrderStable(t *testing.T) {
 
 	newManager := func() *HAPManager {
 		eventBus := newTestEventsBus(t)
-		return NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+		return NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 	}
 
 	hm1 := newManager()
@@ -131,7 +140,7 @@ func TestHAPManagerPublishesCommandEvents(t *testing.T) {
 		Address: "1.2.3.4",
 	}}
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 
 	client, err := eventBus.Client(events.ClientHAP)
 	require.NoError(t, err)
@@ -160,7 +169,7 @@ func TestHAPManagerCreatesBulb(t *testing.T) {
 	}}
 
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
@@ -186,7 +195,7 @@ func TestHAPManagerStats(t *testing.T) {
 		Address: "1.2.3.4",
 	}}
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
 
 	hm.UpdateState(events.StateUpdateEvent{
 		PlugID: "plug-1",
@@ -249,4 +258,21 @@ func TestHAPWriteAppliedWhenPlugAccepts(t *testing.T) {
 
 	_, state, _ := pm.Plug("plug-1")
 	require.True(t, state.On)
+}
+
+// A change stored before HomeKit subscribes is never published to it, so
+// HomeKit must start from the manager's state.
+func TestHAPStartsFromManagerState(t *testing.T) {
+	plugCfg := []plugs.Plug{{ID: "plug-1", Name: "Desk Lamp", Address: "1.2.3.4"}}
+	eventBus := newTestEventsBus(t)
+
+	pm, err := plugs.NewManager(plugCfg, eventBus)
+	require.NoError(t, err)
+	pm.SetClientForTesting("plug-1", &fakePlugClient{})
+
+	_, err = pm.GetStatus(t.Context(), "plug-1")
+	require.NoError(t, err)
+
+	hm := NewHAPManager(plugCfg, "Test Bridge", pm, eventBus)
+	require.True(t, hm.accessories["plug-1"].OnValue())
 }
