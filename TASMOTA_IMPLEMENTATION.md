@@ -13,14 +13,14 @@ This document mirrors `../nefit-homekit/NEFIT_IMPLEMENTATION.md` so both HomeKit
 ## Architecture at a glance
 
 - `config`: loads `TASMOTA_HOMEKIT_*` environment variables and validates plugs + networking.
-- `plugs`: HuJSON parsing, state tracking, and events for each plug; orchestrates HTTP fast-path updates.
-- `mqtt.go`: embeds Mochi MQTT, brokers telemetry, and feeds state changes onto the event channels.
-- `hap.go`: builds brutella/hap accessories representing each plug, listens for commands, and publishes updates back onto the bus.
+- `plugs`: HuJSON parsing and the plug manager, which owns plug state and talks to the plugs over HTTP.
+- `mqtt.go`: embeds Mochi MQTT and turns Tasmota telemetry into `StateChangedEvent`s stamped with their receive time.
+- `hap.go`: builds brutella/hap accessories representing each plug, switches plugs through the manager on HomeKit writes, and applies the manager's state updates.
 - `web.go`: kra/web server with elem-go dashboard, HTMX toggle handlers, SSE event stream, QR code output, metrics, and Tailscale listener integration.
 - `app.go`: ties the pieces together, handles graceful shutdown, ensures MQTT + HTTP + HAP lifecycles stay synchronized.
 - `nix/`: exposes the package, overlay, and NixOS module with firewall + credential wiring.
 
-The runtime keeps parity with `nefit-homekit`: a single eventbus fans state out to HAP, MQTT, and the web dashboard so state stays consistent whether commands originate from HomeKit, the dashboard, or MQTT telemetry.
+The plug manager owns plug state (see README, "Architecture"). It merges MQTT reports and `Status 0` replies into one immutable snapshot, keeping the newer observation, and publishes each change on the eventbus in the order it was stored. HAP applies those updates; the web dashboard reads the snapshot for pages and new SSE streams, then streams the updates. HomeKit and dashboard commands call the manager directly and return once the plug has answered.
 
 ## Configuration surfaces
 

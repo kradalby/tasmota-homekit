@@ -316,101 +316,56 @@ Features:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Tasmota HomeKit Bridge                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────┐      ┌──────────┐      ┌──────────┐                 │
-│  │   HAP    │      │   Web    │      │   MQTT   │                 │
-│  │  Server  │      │  Server  │      │  Broker  │                 │
-│  │ :8080    │      │  :8081   │      │  :1883   │                 │
-│  └────┬─────┘      └────┬─────┘      └────┬─────┘                 │
-│       │                 │                  │                        │
-│       ▼                 ▼                  ▼                        │
-│  ┌────────────┐    ┌──────────┐      ┌──────────┐                 │
-│  │    HAP     │    │   Web    │      │   MQTT   │                 │
-│  │  Manager   │    │  Manager │      │   Hook   │                 │
-│  └─────┬──────┘    └─────┬────┘      └─────┬────┘                 │
-│        │                 │                  │                       │
-│        │    ┌────────────┴───────────┬──────┘                      │
-│        │    │                        │                             │
-│        ▼    ▼                        ▼                             │
-│  ┌───────────────────────────────────────────┐                     │
-│  │      Tailscale EventBus (Pub/Sub)         │                     │
-│  │                                           │                     │
-│  │  Publishers:                              │                     │
-│  │    • PlugManager  (state, errors)         │                     │
-│  │    • MQTTHook     (state)                 │                     │
-│  │                                           │                     │
-│  │  Subscribers:                             │                     │
-│  │    • HAPManager   (state → HomeKit)       │                     │
-│  │    • WebServer    (state → SSE)           │                     │
-│  │                                           │                     │
-│  │  Commands: Go channel (PlugCommandEvent)  │                     │
-│  └──────────────────┬────────────────────────┘                     │
-│                     │                                              │
-│                     ▼                                              │
-│            ┌─────────────────┐                                     │
-│            │  PlugManager    │                                     │
-│            │ (Thread-Safe)   │                                     │
-│            │  • State Map    │                                     │
-│            │  • RW Mutex     │                                     │
-│            └────────┬────────┘                                     │
-│                     │                                              │
-└─────────────────────┼──────────────────────────────────────────────┘
-                      │
-                      │ HTTP Commands (Fast)
-                      ▼
-         ┌────────────────────────────┐
-         │     Tasmota Devices        │
-         │  ┌──────┐ ┌──────┐ ┌────┐ │
-         │  │Plug 1│ │Plug 2│ │... │ │
-         │  └──┬───┘ └──┬───┘ └─┬──┘ │
-         └─────┼────────┼───────┼─────┘
-               │        │       │
-               └────────┴───────┘
-                      │
-                      │ MQTT Telemetry (Reactive)
-                      ▼
-              (Back to MQTT Broker)
+  HomeKit          Browser
+     │                │
+     ▼                ▼
+┌──────────┐    ┌───────────┐
+│HAPManager│    │ WebServer │ ◀── Snapshot() for pages and new SSE streams
+└────┬─────┘    └─────┬─────┘
+     │ SetPower       │ SetPower
+     ▼                ▼
+┌──────────────────────────┐  HTTP: Power, Status 0  ┌───────────────┐
+│       PlugManager        │ ──────────────────────▶ │ Tasmota plugs │
+│ immutable state snapshot │                         └───────┬───────┘
+│ one writer: merge, store │                                 │ MQTT
+│ and publish, in order    │                                 ▼
+│                          │ ◀── StateChangedEvent ── MQTT broker + MQTTHook
+└────────────┬─────────────┘
+             │ StateUpdateEvent
+             ├──▶ HAPManager → HomeKit characteristics
+             └──▶ WebServer  → SSE → browsers
+```
 
-
-Data Flow:
-──────────
-Commands (Control) - Fast direct HTTP:
-  1. HomeKit → HAPManager → PlugManager.SetPower → HTTP → Tasmota
-  2. Web UI → WebServer → PlugManager.SetPower → HTTP → Tasmota
-
-State Updates (Reactive) - EventBus pub/sub pattern:
-  3. Tasmota → MQTT → MQTTHook → eventbus.Publish(PlugStateChangedEvent)
-     ├─→ HAPManager subscribes → outlet.SetValue() → HomeKit clients notified
-     └─→ WebServer subscribes → SSE broadcast → Browser auto-updates
-
-  4. PlugManager direct commands → eventbus.Publish(PlugStateChangedEvent)
-     └─→ Same subscribers notified for consistency
-
-Example: Press button on Tasmota plug
-  • Plug publishes to MQTT broker
-  • MQTTHook receives message, updates state
-  • MQTTHook publishes PlugStateChangedEvent to eventbus
-  • EventBus delivers event to all subscribers:
-    - HAPManager updates HomeKit → iOS app reflects change
-    - WebServer broadcasts via SSE → Browser auto-updates
-  • No manual fan-out, no missed updates
-
-Technology:
-  • EventBus: tailscale.com/util/eventbus (typed pub/sub)
-  • Commands: Go channels (point-to-point)
-  • Thread Safety: sync.RWMutex for shared state
+- **PlugManager owns plug state.** It keeps one immutable snapshot of every
+  plug behind an atomic pointer. Each change (MQTT merge or `Status 0` reply)
+  builds a new snapshot, stores it and publishes a `StateUpdateEvent` under one
+  writer mutex, so subscribers see changes in the order they were stored.
+  `Snapshot()` and `Plug()` read without locking.
+- **Newer observation wins.** Each reading carries when it was observed: an
+  MQTT report its receive time, a `Status 0` reply its request's send time.
+  Power state and energy are ordered separately; a reading older than the
+  stored one of its kind is dropped, so a report queued on the eventbus
+  cannot undo a newer reply. `LastSeen` and `LastUpdated` never move back.
+- **Commands are synchronous.** HomeKit and web writes call
+  `PlugManager.SetPower`, which sends `Power` and then reads `Status 0`. A
+  HomeKit write the plug rejects fails, so HomeKit keeps its old value.
+- **Views follow the snapshot.** HAPManager subscribes to state updates and
+  then seeds its accessories from the snapshot; WebServer renders pages from
+  the snapshot and starts each SSE stream with it before streaming updates.
+- **EventBus** (`tailscale.com/util/eventbus`) carries MQTT reports
+  (`StateChangedEvent`), state updates, commands, errors and component status.
 
 Files:
-──────
-main.go   - Orchestration & initialization
-types.go  - Data structures & events
-plug.go   - PlugManager (state + Tasmota client)
-hap.go    - HAPManager (HomeKit accessories)
-web.go    - WebServer (dashboard)
-mqtt.go   - MQTTHook (telemetry processing)
+
+```
+app.go              wiring and startup
+plugs/manager.go    PlugManager: state, Tasmota HTTP client, MQTT merge
+plugs/types.go      plug config, State, events
+hap.go              HAPManager: HomeKit accessories
+web.go              WebServer: dashboard, SSE, debug pages
+mqtt.go             MQTTHook: Tasmota telemetry
+events/             eventbus wrapper and shared event types
+metrics/            Prometheus collector
 ```
 
 ## Development Status
