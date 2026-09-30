@@ -21,11 +21,20 @@ func hashString(s string) uint64 {
 	return h.Sum64()
 }
 
+// hapWriteTimeout bounds a HomeKit write: the controller's request waits on
+// the plug until it answers.
+const hapWriteTimeout = 5 * time.Second
+
+// powerSetter switches a plug and returns once the plug has answered.
+type powerSetter interface {
+	SetPower(ctx context.Context, plugID string, on bool) error
+}
+
 // Switchable is an interface for accessories that can be turned on/off
 type Switchable interface {
 	SetOn(on bool)
 	OnValue() bool
-	OnValueRemoteUpdate(f func(on bool))
+	OnSetRemoteValue(f func(on bool) error)
 	ID() uint64
 }
 
@@ -42,8 +51,8 @@ func (w *OutletWrapper) OnValue() bool {
 	return w.Outlet.Outlet.On.Value()
 }
 
-func (w *OutletWrapper) OnValueRemoteUpdate(f func(on bool)) {
-	w.Outlet.Outlet.On.OnValueRemoteUpdate(f)
+func (w *OutletWrapper) OnSetRemoteValue(f func(on bool) error) {
+	w.Outlet.Outlet.On.OnSetRemoteValue(f)
 }
 
 func (w *OutletWrapper) ID() uint64 {
@@ -63,8 +72,8 @@ func (w *LightbulbWrapper) OnValue() bool {
 	return w.Lightbulb.Lightbulb.On.Value()
 }
 
-func (w *LightbulbWrapper) OnValueRemoteUpdate(f func(on bool)) {
-	w.Lightbulb.Lightbulb.On.OnValueRemoteUpdate(f)
+func (w *LightbulbWrapper) OnSetRemoteValue(f func(on bool) error) {
+	w.Lightbulb.Lightbulb.On.OnSetRemoteValue(f)
 }
 
 func (w *LightbulbWrapper) ID() uint64 {
@@ -76,8 +85,7 @@ type HAPManager struct {
 	bridge          *accessory.Bridge
 	accessories     map[string]Switchable
 	accessoryOrder  []string
-	commands        chan plugs.CommandEvent
-	plugManager     *plugs.Manager
+	power           powerSetter
 	stateSubscriber *eventbus.Subscriber[events.StateUpdateEvent]
 	eventBus        *events.Bus
 	eventClient     *eventbus.Client
@@ -96,8 +104,7 @@ type HAPManager struct {
 func NewHAPManager(
 	plugConfigs []plugs.Plug,
 	bridgeName string,
-	commands chan plugs.CommandEvent,
-	plugManager *plugs.Manager,
+	power powerSetter,
 	bus *events.Bus,
 ) *HAPManager {
 	client, err := bus.Client(events.ClientHAP)
@@ -117,8 +124,7 @@ func NewHAPManager(
 		bridge:          bridge,
 		accessories:     make(map[string]Switchable),
 		accessoryOrder:  make([]string, 0, len(plugConfigs)),
-		commands:        commands,
-		plugManager:     plugManager,
+		power:           power,
 		stateSubscriber: eventbus.Subscribe[events.StateUpdateEvent](client),
 		eventBus:        bus,
 		eventClient:     client,
@@ -161,20 +167,24 @@ func NewHAPManager(
 		// Capture plug ID for closure
 		plugID := plug.ID
 
-		// Set up handler for when HomeKit changes the state
-		switchable.OnValueRemoteUpdate(func(on bool) {
+		// hap stores the written value only when this returns nil, so a
+		// command the plug did not take never shows up in HomeKit.
+		switchable.OnSetRemoteValue(func(on bool) error {
 			slog.Info("HomeKit command received", "plug_id", plugID, "on", on)
 
 			hm.incomingCommands.Add(1)
 			hm.lastActivity.Store(time.Now().Unix())
+			hm.publishCommand(plugID, on)
 
-			// Send command through event channel
-			commands <- plugs.CommandEvent{
-				PlugID: plugID,
-				On:     on,
+			ctx, cancel := context.WithTimeout(context.Background(), hapWriteTimeout)
+			defer cancel()
+
+			if err := hm.power.SetPower(ctx, plugID, on); err != nil {
+				slog.Error("HomeKit command failed", "plug_id", plugID, "error", err)
+				return err
 			}
 
-			hm.publishCommand(plugID, on)
+			return nil
 		})
 
 		// The accessories are not added to the bridge here: GetAccessories

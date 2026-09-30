@@ -46,7 +46,7 @@ var _ interface {
 	ExecuteBacklog(context.Context, ...string) ([]byte, error)
 } = (*fakeClient)(nil)
 
-func newTestManager(t *testing.T) (*Manager, *fakeClient, chan CommandEvent) {
+func newTestManager(t *testing.T) (*Manager, *fakeClient) {
 	t.Helper()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -54,19 +54,17 @@ func newTestManager(t *testing.T) (*Manager, *fakeClient, chan CommandEvent) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = eventBus.Close() })
 
-	commands := make(chan CommandEvent, 1)
-
-	pm, err := NewManager([]Plug{{ID: "plug-1", Name: "Plug", Address: "1"}}, commands, eventBus)
+	pm, err := NewManager([]Plug{{ID: "plug-1", Name: "Plug", Address: "1"}}, eventBus)
 	require.NoError(t, err)
 
 	fake := &fakeClient{}
 	pm.plugs["plug-1"].Client = fake
 
-	return pm, fake, commands
+	return pm, fake
 }
 
 func TestSetPowerUpdatesState(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	ctx := context.Background()
 	require.NoError(t, pm.SetPower(ctx, "plug-1", true))
@@ -81,7 +79,7 @@ func TestSetPowerUpdatesState(t *testing.T) {
 }
 
 func TestConfigureMQTTBacklog(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	err := pm.ConfigureMQTT(context.Background(), "plug-1", "host", 1234)
 	require.NoError(t, err)
@@ -94,7 +92,7 @@ func TestConfigureMQTTBacklog(t *testing.T) {
 // Current Tasmota sends Status.Power as a bitmask string ("1"); the reply must
 // still be read, and what it changes must reach subscribers.
 func TestGetStatusIgnoresStatusPowerEncoding(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	client, err := pm.eventBus.Client(events.ClientWeb)
 	require.NoError(t, err)
@@ -135,7 +133,7 @@ func TestGetStatusIgnoresStatusPowerEncoding(t *testing.T) {
 }
 
 func TestGetStatusWithoutPowerLeavesStateAlone(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	fake.responses = [][]byte{
 		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
@@ -171,7 +169,7 @@ func (c *heldClient) ExecuteBacklog(context.Context, ...string) ([]byte, error) 
 // Two status requests overlap and the older one answers last: its reply
 // must not replace the newer one.
 func TestOlderStatusReplyDropped(t *testing.T) {
-	pm, _, _ := newTestManager(t)
+	pm, _ := newTestManager(t)
 	held := &heldClient{calls: make(chan chan []byte)}
 	pm.plugs["plug-1"].Client = held
 
@@ -202,7 +200,7 @@ func TestOlderStatusReplyDropped(t *testing.T) {
 // update publishes while holding mu, so a subscriber that stops reading
 // must not hold up later changes.
 func TestStalledSubscriberDoesNotBlockUpdates(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	client, err := pm.eventBus.Client(events.ClientWeb)
 	require.NoError(t, err)
@@ -237,7 +235,7 @@ func TestStalledSubscriberDoesNotBlockUpdates(t *testing.T) {
 // is answered and stored. Merging the report late must not undo the newer
 // reply or move its timestamps backward.
 func TestQueuedMQTTReportOlderThanStatusDropped(t *testing.T) {
-	pm, fake, _ := newTestManager(t)
+	pm, fake := newTestManager(t)
 
 	client, err := pm.eventBus.Client(events.ClientMQTT)
 	require.NoError(t, err)

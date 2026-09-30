@@ -1,8 +1,12 @@
 package tasmotahomekit
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -31,9 +35,8 @@ func TestHAPManagerUpdateState(t *testing.T) {
 		Address: "1.2.3.4",
 	}}
 
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
 	}
@@ -54,9 +57,8 @@ func TestHAPManagerProcessesEvents(t *testing.T) {
 		Name:    "Desk Lamp",
 		Address: "1.2.3.4",
 	}}
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 	ctx := t.Context()
 
 	hm.Start(ctx)
@@ -79,9 +81,8 @@ func TestHAPManagerExposesAccessories(t *testing.T) {
 		Name:    "Desk Lamp",
 		Address: "1.2.3.4",
 	}}
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 
 	acc := hm.GetAccessories()
 	if len(acc) != 2 {
@@ -101,9 +102,8 @@ func TestHAPManagerAccessoryOrderStable(t *testing.T) {
 	}
 
 	newManager := func() *HAPManager {
-		commands := make(chan plugs.CommandEvent, 1)
 		eventBus := newTestEventsBus(t)
-		return NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+		return NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 	}
 
 	hm1 := newManager()
@@ -130,9 +130,8 @@ func TestHAPManagerPublishesCommandEvents(t *testing.T) {
 		Name:    "Desk Lamp",
 		Address: "1.2.3.4",
 	}}
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 
 	client, err := eventBus.Client(events.ClientHAP)
 	require.NoError(t, err)
@@ -160,9 +159,8 @@ func TestHAPManagerCreatesBulb(t *testing.T) {
 		Type:    "bulb",
 	}}
 
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 
 	if len(hm.accessories) != 1 {
 		t.Fatalf("expected 1 accessory, got %d", len(hm.accessories))
@@ -187,32 +185,9 @@ func TestHAPManagerStats(t *testing.T) {
 		Name:    "Desk Lamp",
 		Address: "1.2.3.4",
 	}}
-	commands := make(chan plugs.CommandEvent, 1)
 	eventBus := newTestEventsBus(t)
-	hm := NewHAPManager(plugCfg, "Test Bridge", commands, nil, eventBus)
+	hm := NewHAPManager(plugCfg, "Test Bridge", nil, eventBus)
 
-	// Simulate incoming command
-	acc := hm.accessories["plug-1"]
-	acc.OnValueRemoteUpdate(func(on bool) {
-		// This closure is what HAP calls, which calls hm.publishCommand
-		// We need to manually trigger what the closure does or call the closure itself if we could access it.
-		// But we can't easily access the closure registered in NewHAPManager without exposing it.
-		// However, NewHAPManager registers the closure on the Switchable.
-		// So if we trigger the callback on the Switchable, it should ripple through.
-	})
-
-	// Wait, Switchable.OnValueRemoteUpdate registers a callback.
-	// The closure in NewHAPManager IS the callback.
-	// But we can't trigger it from here easily because we don't have access to the underlying characteristic's callback mechanism directly via Switchable interface.
-	// Actually, the OutletWrapper wraps accessory.Outlet.
-	// We can access the underlying characteristic if we cast it.
-
-	// Trigger the callback manually to simulate HAP interaction
-	// But `OnValueRemoteUpdate` just sets the callback, it doesn't trigger it.
-	// The callback is triggered by the HAP library when a request comes in.
-	// We can manually call the function we registered if we had a way to get it back, but we don't.
-
-	// However, we can test UpdateState (outgoing)
 	hm.UpdateState(events.StateUpdateEvent{
 		PlugID: "plug-1",
 		On:     true,
@@ -225,4 +200,53 @@ func TestHAPManagerStats(t *testing.T) {
 	if hm.lastActivity.Load() == 0 {
 		t.Error("expected lastActivity to be set")
 	}
+}
+
+type failingPlugClient struct{}
+
+func (failingPlugClient) ExecuteCommand(context.Context, string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (failingPlugClient) ExecuteBacklog(context.Context, ...string) ([]byte, error) {
+	return nil, errors.New("unreachable")
+}
+
+func newHAPWithPlug(t *testing.T, client plugs.Client) (*HAPManager, *plugs.Manager) {
+	t.Helper()
+
+	plugCfg := []plugs.Plug{{ID: "plug-1", Name: "Desk Lamp", Address: "1.2.3.4"}}
+	eventBus := newTestEventsBus(t)
+
+	pm, err := plugs.NewManager(plugCfg, eventBus)
+	require.NoError(t, err)
+	pm.SetClientForTesting("plug-1", client)
+
+	return NewHAPManager(plugCfg, "Test Bridge", pm, eventBus), pm
+}
+
+func homeKitWrite(hm *HAPManager, plugID string, on bool) int {
+	c := hm.accessories[plugID].(*OutletWrapper).Outlet.Outlet.On
+	_, code := c.SetValueRequest(on, httptest.NewRequest(http.MethodPut, "/characteristics", nil))
+	return code
+}
+
+// A write the plug rejects must fail in HomeKit and leave the characteristic
+// alone; nothing would reset it later.
+func TestHAPWriteRejectedWhenPlugFails(t *testing.T) {
+	hm, _ := newHAPWithPlug(t, failingPlugClient{})
+
+	require.NotZero(t, homeKitWrite(hm, "plug-1", true))
+	require.False(t, hm.accessories["plug-1"].OnValue())
+}
+
+func TestHAPWriteAppliedWhenPlugAccepts(t *testing.T) {
+	hm, pm := newHAPWithPlug(t, &fakePlugClient{})
+
+	require.Zero(t, homeKitWrite(hm, "plug-1", true))
+	require.True(t, hm.accessories["plug-1"].OnValue())
+	require.Equal(t, uint64(1), hm.incomingCommands.Load())
+
+	_, state, _ := pm.Plug("plug-1")
+	require.True(t, state.On)
 }
