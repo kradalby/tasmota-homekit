@@ -75,7 +75,7 @@ func TestSetPowerUpdatesState(t *testing.T) {
 	// So the last command should be "Status 0"
 	require.Equal(t, "Status 0", fake.lastCmd)
 
-	state, ok := pm.states["plug-1"]
+	_, state, ok := pm.Plug("plug-1")
 	require.True(t, ok)
 	require.True(t, state.On)
 }
@@ -150,4 +150,38 @@ func TestGetStatusWithoutPowerLeavesStateAlone(t *testing.T) {
 
 	_, state, _ := pm.Plug("plug-1")
 	require.True(t, state.On)
+}
+
+// update publishes while holding mu, so a subscriber that stops reading
+// must not hold up later changes.
+func TestStalledSubscriberDoesNotBlockUpdates(t *testing.T) {
+	pm, fake, _ := newTestManager(t)
+
+	client, err := pm.eventBus.Client(events.ClientWeb)
+	require.NoError(t, err)
+	stalled := eventbus.Subscribe[events.StateUpdateEvent](client)
+	t.Cleanup(stalled.Close)
+
+	const n = 200
+	for i := range n {
+		power := "OFF"
+		if i%2 == 0 {
+			power = "ON"
+		}
+		fake.responses = append(fake.responses, []byte(`{"StatusSTS":{"POWER":"`+power+`"}}`))
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range n {
+			_, _ = pm.GetStatus(context.Background(), "plug-1")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("updates blocked behind a stalled subscriber")
+	}
 }
