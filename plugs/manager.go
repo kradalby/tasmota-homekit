@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kradalby/tasmota-go"
@@ -16,9 +18,14 @@ import (
 
 // Manager manages all Tasmota plug clients and their state.
 type Manager struct {
-	plugs            map[string]*Info
-	states           map[string]*State
-	mu               sync.RWMutex
+	plugs map[string]*Info
+
+	// mu serialises writers so every state is stored and published before
+	// the next change starts: subscribers then see changes in the order they
+	// were made. Readers load states without it.
+	mu     sync.Mutex
+	states atomic.Pointer[map[string]State]
+
 	commands         chan CommandEvent
 	statePublisher   *eventbus.Publisher[StateChangedEvent]
 	errorPublisher   *eventbus.Publisher[ErrorEvent]
@@ -64,7 +71,6 @@ func NewManager(
 
 	pm := &Manager{
 		plugs:            make(map[string]*Info),
-		states:           make(map[string]*State),
 		commands:         commands,
 		statePublisher:   eventbus.Publish[StateChangedEvent](client),
 		errorPublisher:   eventbus.Publish[ErrorEvent](client),
@@ -73,6 +79,7 @@ func NewManager(
 		stateEventClient: client,
 	}
 
+	states := make(map[string]State, len(plugConfigs))
 	for _, plugConfig := range plugConfigs {
 		client, err := tasmota.NewClient(plugConfig.Address)
 		if err != nil {
@@ -84,22 +91,22 @@ func NewManager(
 			Client: &tasmotaClient{Client: client},
 		}
 
-		pm.states[plugConfig.ID] = &State{
-			ID:            plugConfig.ID,
-			Name:          plugConfig.Name,
-			On:            false,
-			LastUpdated:   time.Now(),
-			MQTTConnected: false,
-			LastSeen:      time.Time{},
+		states[plugConfig.ID] = State{
+			ID:          plugConfig.ID,
+			Name:        plugConfig.Name,
+			LastUpdated: time.Now(),
 		}
-
-		pm.publishStateUpdate("initial", plugConfig.ID, *pm.states[plugConfig.ID])
 
 		slog.Info(
 			"Initialized plug client",
 			"id", plugConfig.ID,
 			"address", plugConfig.Address,
 		)
+	}
+
+	pm.states.Store(&states)
+	for _, plugConfig := range plugConfigs {
+		pm.publishStateUpdate("initial", plugConfig.ID, states[plugConfig.ID])
 	}
 
 	return pm, nil
@@ -140,8 +147,7 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		return fmt.Errorf("plug %s not found", plugID)
 	}
 
-	pm.mu.RLock()
-	state := pm.states[plugID]
+	state := (*pm.states.Load())[plugID]
 	if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 60*time.Second {
 		slog.Warn(
 			"Attempting to control plug that hasn't been seen recently",
@@ -150,7 +156,6 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 			"time_since", time.Since(state.LastSeen).Round(time.Second),
 		)
 	}
-	pm.mu.RUnlock()
 
 	command := "Power OFF"
 	if on {
@@ -190,6 +195,28 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 
 	slog.Debug("Raw Tasmota Status response", "plug_id", plugID, "response", string(response))
 
+	reading, err := parseStatus(response)
+	if err != nil {
+		return nil, err
+	}
+
+	state, _ := pm.update("status", plugID, func(s State) State {
+		return applyStatus(s, reading, time.Now())
+	})
+
+	return &state, nil
+}
+
+// statusReading is what a Status 0 reply says about a plug.
+type statusReading struct {
+	On      bool
+	Power   float64
+	Voltage float64
+	Current float64
+	Energy  float64
+}
+
+func parseStatus(response []byte) (statusReading, error) {
 	// Status.Power is left out: its encoding differs between firmware
 	// versions, and StatusSTS.POWER carries the same bit.
 	var statusResp struct {
@@ -207,39 +234,36 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	}
 
 	if err := json.Unmarshal(response, &statusResp); err != nil {
-		return nil, fmt.Errorf("failed to parse status: %w", err)
+		return statusReading{}, fmt.Errorf("failed to parse status: %w", err)
 	}
 	if statusResp.StatusSTS.Power == "" {
-		return nil, fmt.Errorf("status has no StatusSTS.POWER")
+		return statusReading{}, fmt.Errorf("status has no StatusSTS.POWER")
 	}
 
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
+	energy := statusResp.StatusSNS.Energy
+	return statusReading{
+		On:      statusResp.StatusSTS.Power == "ON",
+		Power:   energy.Power,
+		Voltage: energy.Voltage,
+		Current: energy.Current,
+		Energy:  energy.Total,
+	}, nil
+}
 
-	state := pm.states[plugID]
-	state.On = statusResp.StatusSTS.Power == "ON"
-	state.Power = statusResp.StatusSNS.Energy.Power
-	state.Voltage = statusResp.StatusSNS.Energy.Voltage
-	state.Current = statusResp.StatusSNS.Energy.Current
-	state.Energy = statusResp.StatusSNS.Energy.Total
-
-	state.LastUpdated = time.Now()
-	copy := *state
-	pm.publishStateUpdate("status", plugID, copy)
-	return &copy, nil
+func applyStatus(s State, r statusReading, now time.Time) State {
+	s.On = r.On
+	s.Power = r.Power
+	s.Voltage = r.Voltage
+	s.Current = r.Current
+	s.Energy = r.Energy
+	s.LastUpdated = now
+	return s
 }
 
 // RefreshAll triggers a status update for all plugs concurrently.
 func (pm *Manager) RefreshAll(ctx context.Context) {
 	var wg sync.WaitGroup
-	pm.mu.RLock()
-	ids := make([]string, 0, len(pm.plugs))
 	for id := range pm.plugs {
-		ids = append(ids, id)
-	}
-	pm.mu.RUnlock()
-
-	for _, id := range ids {
 		wg.Add(1)
 		go func(plugID string) {
 			defer wg.Done()
@@ -278,72 +302,101 @@ func (pm *Manager) ProcessStateEvents(ctx context.Context) {
 	for {
 		select {
 		case event := <-pm.stateSubscriber.Events():
-			pm.mu.Lock()
-			state, exists := pm.states[event.PlugID]
-			if !exists {
-				pm.mu.Unlock()
+			state, ok := pm.update("eventbus", event.PlugID, func(s State) State {
+				return mergeEvent(s, event)
+			})
+			if !ok {
 				slog.Warn("Received state event for unknown plug", "plug_id", event.PlugID)
 				continue
 			}
 
-			if len(event.UpdatedFields) > 0 {
-				// Selective update based on what changed
-				for _, field := range event.UpdatedFields {
-					switch field {
-					case "On":
-						state.On = event.State.On
-					case "Power":
-						state.Power = event.State.Power
-					case "Voltage":
-						state.Voltage = event.State.Voltage
-					case "Current":
-						state.Current = event.State.Current
-					case "Energy":
-						state.Energy = event.State.Energy
-					case "MQTTConnected":
-						state.MQTTConnected = event.State.MQTTConnected
-					case "LastSeen":
-						state.LastSeen = event.State.LastSeen
-					case "LastUpdated":
-						state.LastUpdated = event.State.LastUpdated
-					}
-				}
-			} else {
-				// Fallback for legacy events or internal updates
-				if !event.State.LastSeen.IsZero() {
-					state.LastSeen = event.State.LastSeen
-					state.MQTTConnected = event.State.MQTTConnected
-				}
-
-				if !event.State.LastUpdated.IsZero() {
-					state.LastUpdated = event.State.LastUpdated
-					state.On = event.State.On
-					state.Power = event.State.Power
-					state.Voltage = event.State.Voltage
-					state.Current = event.State.Current
-					state.Energy = event.State.Energy
-				}
-			}
-
-			stateCopy := *state
-			pm.mu.Unlock()
-
 			slog.Debug(
 				"Merged state from eventbus",
 				"plug_id", event.PlugID,
-				"on", stateCopy.On,
-				"power", stateCopy.Power,
-				"voltage", stateCopy.Voltage,
-				"current", stateCopy.Current,
-				"mqtt_connected", stateCopy.MQTTConnected,
-				"last_seen", stateCopy.LastSeen,
+				"on", state.On,
+				"power", state.Power,
+				"voltage", state.Voltage,
+				"current", state.Current,
+				"mqtt_connected", state.MQTTConnected,
+				"last_seen", state.LastSeen,
 			)
-			pm.publishStateUpdate("eventbus", event.PlugID, stateCopy)
 
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// mergeEvent returns s with the fields event carries.
+func mergeEvent(s State, event StateChangedEvent) State {
+	if len(event.UpdatedFields) == 0 {
+		// Fallback for legacy events or internal updates
+		if !event.State.LastSeen.IsZero() {
+			s.LastSeen = event.State.LastSeen
+			s.MQTTConnected = event.State.MQTTConnected
+		}
+
+		if !event.State.LastUpdated.IsZero() {
+			s.LastUpdated = event.State.LastUpdated
+			s.On = event.State.On
+			s.Power = event.State.Power
+			s.Voltage = event.State.Voltage
+			s.Current = event.State.Current
+			s.Energy = event.State.Energy
+		}
+
+		return s
+	}
+
+	for _, field := range event.UpdatedFields {
+		switch field {
+		case "On":
+			s.On = event.State.On
+		case "Power":
+			s.Power = event.State.Power
+		case "Voltage":
+			s.Voltage = event.State.Voltage
+		case "Current":
+			s.Current = event.State.Current
+		case "Energy":
+			s.Energy = event.State.Energy
+		case "MQTTConnected":
+			s.MQTTConnected = event.State.MQTTConnected
+		case "LastSeen":
+			s.LastSeen = event.State.LastSeen
+		case "LastUpdated":
+			s.LastUpdated = event.State.LastUpdated
+		}
+	}
+
+	return s
+}
+
+// update replaces plugID's state with f's result. The new snapshot is
+// published before mu is released so no later change can overtake it; that
+// is safe because eventbus queues per subscriber without bound, so Publish
+// does not wait on a slow consumer.
+func (pm *Manager) update(source, plugID string, f func(State) State) (State, bool) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	states := *pm.states.Load()
+	prev, ok := states[plugID]
+	if !ok {
+		return State{}, false
+	}
+
+	next := f(prev)
+	if next == prev {
+		return prev, true
+	}
+
+	states = maps.Clone(states)
+	states[plugID] = next
+	pm.states.Store(&states)
+	pm.publishStateUpdate(source, plugID, next)
+
+	return next, true
 }
 
 // MonitorConnections monitors plug connections and reconfigures MQTT when needed.
@@ -359,10 +412,8 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 		case <-ticker.C:
 			if !initialCheckDone && time.Since(initialConfigTime) > 60*time.Second {
 				initialCheckDone = true
-				pm.mu.RLock()
-				for plugID, state := range pm.states {
-					if state.LastSeen.IsZero() {
-						pm.mu.RUnlock()
+				for plugID, item := range pm.Snapshot() {
+					if item.State.LastSeen.IsZero() {
 						slog.Warn(
 							"Plug has never connected to MQTT, attempting reconfiguration",
 							"plug_id", plugID,
@@ -387,18 +438,15 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 								)
 							}
 						}
-						pm.mu.RLock()
 					}
 				}
-				pm.mu.RUnlock()
 			}
 
 			if initialCheckDone {
-				pm.mu.RLock()
-				for plugID, state := range pm.states {
+				for plugID, item := range pm.Snapshot() {
+					state := item.State
 					if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 120*time.Second {
 						timeSince := time.Since(state.LastSeen).Round(time.Second)
-						pm.mu.RUnlock()
 
 						slog.Warn(
 							"Plug hasn't been seen in a while, checking connectivity",
@@ -430,10 +478,8 @@ func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, br
 								)
 							}
 						}
-						pm.mu.RLock()
 					}
 				}
-				pm.mu.RUnlock()
 			}
 
 		case <-ctx.Done():
@@ -447,22 +493,19 @@ func (pm *Manager) Snapshot() map[string]struct {
 	Plug  Plug
 	State State
 } {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
+	states := *pm.states.Load()
 	result := make(map[string]struct {
 		Plug  Plug
 		State State
 	}, len(pm.plugs))
 
 	for id, info := range pm.plugs {
-		state := pm.states[id]
 		result[id] = struct {
 			Plug  Plug
 			State State
 		}{
 			Plug:  info.Config,
-			State: *state,
+			State: states[id],
 		}
 	}
 
@@ -471,20 +514,17 @@ func (pm *Manager) Snapshot() map[string]struct {
 
 // Plug returns the plug info and state for the given ID.
 func (pm *Manager) Plug(plugID string) (Plug, State, bool) {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
 	info, ok := pm.plugs[plugID]
 	if !ok {
 		return Plug{}, State{}, false
 	}
 
-	state, ok := pm.states[plugID]
+	state, ok := (*pm.states.Load())[plugID]
 	if !ok {
 		return Plug{}, State{}, false
 	}
 
-	return info.Config, *state, true
+	return info.Config, state, true
 }
 
 func (pm *Manager) publishStateUpdate(source, plugID string, state State) {

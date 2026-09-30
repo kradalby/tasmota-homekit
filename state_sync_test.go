@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -351,4 +352,75 @@ func TestStateConsistencyAfterMQTTFlapping(t *testing.T) {
 
 	// Final state is OFF
 	env.assertAllStatesMatch("plug-1", false, "After flapping, all views should converge to final state OFF")
+}
+
+// gateLog parks the first goroutine that logs msg until release is closed.
+type gateLog struct {
+	msg     string
+	hit     chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gateLog) Enabled(context.Context, slog.Level) bool { return true }
+func (g *gateLog) WithAttrs([]slog.Attr) slog.Handler       { return g }
+func (g *gateLog) WithGroup(string) slog.Handler            { return g }
+
+func (g *gateLog) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == g.msg {
+		g.once.Do(func() {
+			close(g.hit)
+			<-g.release
+		})
+	}
+	return nil
+}
+
+// An MQTT merge and an HTTP status reply race. Whichever is stored last must
+// also be published last, or HAP and web keep the value the manager dropped.
+func TestStatePublishedInMutationOrder(t *testing.T) {
+	env := setupStateSyncTest(t, []plugs.Plug{
+		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
+		{ID: "plug-2", Name: "Barrier", Address: "192.168.1.101"},
+	})
+	env.fakeClient.responses = [][]byte{
+		[]byte(`{"StatusSTS":{"POWER":"OFF"}}`),
+	}
+
+	// Park the MQTT merge at its debug log, which used to sit between
+	// storing the merged state and publishing it.
+	gate := &gateLog{
+		msg:     "Merged state from eventbus",
+		hit:     make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(gate))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	env.simulateMQTTUpdate("plug-1", true)
+	select {
+	case <-gate.hit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("MQTT merge never logged")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = env.manager.GetStatus(env.ctx, "plug-1")
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(gate.release)
+	<-done
+
+	// Events are merged and delivered in order, so once HAP sees plug-2
+	// anything the parked merge still had to publish has landed.
+	env.simulateMQTTUpdate("plug-2", true)
+	require.Eventually(t, func() bool { return env.getHAPState("plug-2") }, 2*time.Second, 10*time.Millisecond)
+
+	env.assertAllStatesMatch("plug-1", false, "HTTP OFF was stored last")
 }
