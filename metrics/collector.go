@@ -11,6 +11,7 @@ import (
 	"tailscale.com/util/eventbus"
 
 	"github.com/kradalby/tasmota-homekit/events"
+	"github.com/kradalby/tasmota-homekit/plugs"
 )
 
 // Collector subscribes to eventbus updates and exposes Prometheus metrics.
@@ -18,8 +19,10 @@ type Collector struct {
 	logger         *slog.Logger
 	statusSub      *eventbus.Subscriber[events.ConnectionStatusEvent]
 	commandSub     *eventbus.Subscriber[events.CommandEvent]
+	errorSub       *eventbus.Subscriber[plugs.ErrorEvent]
 	statusGauge    *prometheus.GaugeVec
 	commandCounter *prometheus.CounterVec
+	errorCounter   *prometheus.CounterVec
 	ctx            context.Context
 	cancel         context.CancelFunc
 	shutdownOnce   sync.Once
@@ -49,6 +52,7 @@ func NewCollector(ctx context.Context, logger *slog.Logger, bus *events.Bus, reg
 	collectorCtx, cancel := context.WithCancel(ctx)
 	statusSub := eventbus.Subscribe[events.ConnectionStatusEvent](client)
 	commandSub := eventbus.Subscribe[events.CommandEvent](client)
+	errorSub := eventbus.Subscribe[plugs.ErrorEvent](client)
 
 	statusGauge := promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
 		Name: "tasmota_homekit_component_status",
@@ -60,19 +64,27 @@ func NewCollector(ctx context.Context, logger *slog.Logger, bus *events.Bus, reg
 		Help: "Total control commands by source and plug",
 	}, []string{"source", "plug_id", "command_type"})
 
+	errorCounter := promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
+		Name: "tasmota_homekit_plug_errors_total",
+		Help: "Failed requests to a plug: commands, status reads and MQTT setup",
+	}, []string{"plug_id"})
+
 	c := &Collector{
 		logger:         logger,
 		statusSub:      statusSub,
 		commandSub:     commandSub,
+		errorSub:       errorSub,
 		statusGauge:    statusGauge,
 		commandCounter: commandCounter,
+		errorCounter:   errorCounter,
 		ctx:            collectorCtx,
 		cancel:         cancel,
 	}
 
-	c.workers.Add(2)
+	c.workers.Add(3)
 	go c.consumeStatuses()
 	go c.consumeCommands()
+	go c.consumeErrors()
 
 	logger.Info("metrics collector started")
 
@@ -88,6 +100,9 @@ func (c *Collector) Close() {
 		}
 		if c.commandSub != nil {
 			c.commandSub.Close()
+		}
+		if c.errorSub != nil {
+			c.errorSub.Close()
 		}
 		c.workers.Wait()
 		c.logger.Info("metrics collector stopped")
@@ -112,6 +127,18 @@ func (c *Collector) consumeCommands() {
 		select {
 		case evt := <-c.commandSub.Events():
 			c.observeCommand(evt)
+		case <-c.ctx.Done():
+			return
+		}
+	}
+}
+
+func (c *Collector) consumeErrors() {
+	defer c.workers.Done()
+	for {
+		select {
+		case evt := <-c.errorSub.Events():
+			c.errorCounter.WithLabelValues(evt.PlugID).Inc()
 		case <-c.ctx.Done():
 			return
 		}

@@ -111,12 +111,22 @@ func NewManager(
 	return pm, nil
 }
 
+// report publishes a failed plug request. Every exported request path and
+// checkMQTT call it once, so each failure is counted once.
+func (pm *Manager) report(plugID string, err error) {
+	if err != nil {
+		pm.errorPublisher.Publish(ErrorEvent{PlugID: plugID, Error: err})
+	}
+}
+
 // checkMQTT reads plugID's status, which also refreshes its state, and sends
 // only the MQTT settings that differ from the broker's: Tasmota restarts on
 // MqttHost and MqttPort even when the value is unchanged. A plug is
 // reconfigured at most once per run, so one that stores a value other than
 // the one sent is not restarted on every check.
-func (pm *Manager) checkMQTT(ctx context.Context, plugID, host string, port int) error {
+func (pm *Manager) checkMQTT(ctx context.Context, plugID, host string, port int) (err error) {
+	defer func() { pm.report(plugID, err) }()
+
 	r, _, err := pm.status(ctx, plugID)
 	if err != nil {
 		return err
@@ -152,7 +162,9 @@ func (pm *Manager) checkMQTT(ctx context.Context, plugID, host string, port int)
 }
 
 // SetPower sets the power state of a plug.
-func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
+func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) (err error) {
+	defer func() { pm.report(plugID, err) }()
+
 	info, exists := pm.plugs[plugID]
 	if !exists {
 		return fmt.Errorf("plug %s not found", plugID)
@@ -172,11 +184,7 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		got, err = parsePower(reply)
 	}
 	if err != nil {
-		pm.errorPublisher.Publish(ErrorEvent{
-			PlugID: plugID,
-			Error:  fmt.Errorf("failed to set power: %w", err),
-		})
-		return err
+		return fmt.Errorf("failed to set power: %w", err)
 	}
 
 	pm.update("command", plugID, func(s State) State {
@@ -209,7 +217,9 @@ func parsePower(reply []byte) (bool, error) {
 }
 
 // GetStatus fetches the current status of a plug.
-func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error) {
+func (pm *Manager) GetStatus(ctx context.Context, plugID string) (_ *State, err error) {
+	defer func() { pm.report(plugID, err) }()
+
 	_, state, err := pm.status(ctx, plugID)
 	if err != nil {
 		return nil, err
