@@ -159,7 +159,15 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		command = "Power ON"
 	}
 
-	if _, err := info.Client.ExecuteCommand(ctx, command); err != nil {
+	// Tasmota answers Power with the relay state it then has, which confirms
+	// the switch without a Status 0 round trip.
+	sent := time.Now()
+	reply, err := info.Client.ExecuteCommand(ctx, command)
+	var got bool
+	if err == nil {
+		got, err = parsePower(reply)
+	}
+	if err != nil {
 		pm.errorPublisher.Publish(ErrorEvent{
 			PlugID: plugID,
 			Error:  fmt.Errorf("failed to set power: %w", err),
@@ -167,15 +175,33 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 		return err
 	}
 
-	// Immediately query status to get actual device state
-	// This replaces the optimistic update and ensures we only publish confirmed state
-	if _, err := pm.GetStatus(ctx, plugID); err != nil {
-		slog.Debug("Failed to get status after power command", "plug_id", plugID, "error", err)
-		// Even if status query fails, the command likely succeeded
-		// MQTT will report the state change shortly
+	pm.update("command", plugID, func(s State) State {
+		return applyStatus(s, statusReading{On: got}, sent, time.Now())
+	})
+
+	if got != on {
+		return fmt.Errorf("plug %s answered %q with %s", plugID, command, reply)
 	}
 
 	return nil
+}
+
+// parsePower reads the relay state a reply to Power reports.
+func parsePower(reply []byte) (bool, error) {
+	var r struct {
+		Power string `json:"POWER"`
+	}
+	if err := json.Unmarshal(reply, &r); err != nil {
+		return false, fmt.Errorf("failed to parse power reply: %w", err)
+	}
+
+	switch r.Power {
+	case "ON":
+		return true, nil
+	case "OFF":
+		return false, nil
+	}
+	return false, fmt.Errorf("power reply has no POWER: %s", reply)
 }
 
 // GetStatus fetches the current status of a plug.
@@ -205,10 +231,11 @@ func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error)
 	return &state, nil
 }
 
-// statusReading is what a Status 0 reply says about a plug.
+// statusReading is what a plug's reply says about it. Energy is nil when the
+// reply carries none, as a reply to Power never does.
 type statusReading struct {
 	On     bool
-	Energy Energy
+	Energy *Energy
 }
 
 func parseStatus(response []byte) (statusReading, error) {
@@ -219,7 +246,7 @@ func parseStatus(response []byte) (statusReading, error) {
 			Power string `json:"POWER"`
 		} `json:"StatusSTS"`
 		StatusSNS struct {
-			Energy Energy `json:"ENERGY"`
+			Energy *Energy `json:"ENERGY"`
 		} `json:"StatusSNS"`
 	}
 
@@ -236,10 +263,10 @@ func parseStatus(response []byte) (statusReading, error) {
 	}, nil
 }
 
-// applyStatus folds a reply to a status request sent at sent into s. The
-// reply shows the plug no earlier than sent, so sent is when it was observed.
+// applyStatus folds a reply to a request sent at sent into s. The reply
+// shows the plug no earlier than sent, so sent is when it was observed.
 func applyStatus(s State, r statusReading, sent, now time.Time) State {
-	if s.observe(sent, &r.On, &r.Energy) {
+	if s.observe(sent, &r.On, r.Energy) {
 		s.LastUpdated = latest(s.LastUpdated, now)
 	}
 	return s

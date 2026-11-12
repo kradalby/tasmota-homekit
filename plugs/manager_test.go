@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 
 type fakeClient struct {
 	mu        sync.Mutex
-	lastCmd   string
+	cmds      []string
 	backlog   []string
 	responses [][]byte
 }
@@ -24,13 +25,17 @@ type fakeClient struct {
 func (f *fakeClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.lastCmd = cmd
+	f.cmds = append(f.cmds, cmd)
 	if len(f.responses) > 0 {
 		resp := f.responses[0]
 		f.responses = f.responses[1:]
 		return resp, nil
 	}
-	// Default response for Status 0 command - matches real Tasmota format
+	// Answer as a single-relay plug that is on: Power with the state it
+	// switched to, Status 0 with its status.
+	if state, ok := strings.CutPrefix(cmd, "Power "); ok {
+		return []byte(`{"POWER":"` + state + `"}`), nil
+	}
 	return []byte(`{"StatusSTS":{"POWER":"ON"}}`), nil
 }
 
@@ -63,19 +68,76 @@ func newTestManager(t *testing.T) (*Manager, *fakeClient) {
 	return pm, fake
 }
 
-func TestSetPowerUpdatesState(t *testing.T) {
+// SetPower takes the plug's state from its reply to the Power command, in
+// one round trip, and fails unless the reply confirms the state asked for:
+// HomeKit must not show a state the plug did not take.
+func TestSetPowerStoresReply(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reply   string
+		wantErr bool
+		wantOn  bool
+	}{
+		{"confirmed", `{"POWER":"ON"}`, false, true},
+		{"plug stayed off", `{"POWER":"OFF"}`, true, false},
+		{"other relay", `{"POWER1":"ON"}`, true, false},
+		{"unknown command", `{"Command":"Unknown"}`, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pm, fake := newTestManager(t)
+			fake.responses = [][]byte{[]byte(tc.reply)}
+
+			err := pm.SetPower(context.Background(), "plug-1", true)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, []string{"Power ON"}, fake.cmds)
+			_, state, _ := pm.Plug("plug-1")
+			require.Equal(t, tc.wantOn, state.On)
+		})
+	}
+}
+
+// A Power reply carries no energy reading, so switching leaves the last one
+// in place until the next SENSOR report or status refresh replaces it.
+func TestSetPowerKeepsEnergy(t *testing.T) {
 	pm, fake := newTestManager(t)
+	fake.responses = [][]byte{[]byte(`{"StatusSTS":{"POWER":"ON"},"StatusSNS":{"ENERGY":{"Power":42}}}`)}
 
 	ctx := context.Background()
-	require.NoError(t, pm.SetPower(ctx, "plug-1", true))
+	_, err := pm.GetStatus(ctx, "plug-1")
+	require.NoError(t, err)
+	require.NoError(t, pm.SetPower(ctx, "plug-1", false))
 
-	// SetPower now calls GetStatus immediately after sending the power command
-	// So the last command should be "Status 0"
-	require.Equal(t, "Status 0", fake.lastCmd)
+	_, state, _ := pm.Plug("plug-1")
+	require.False(t, state.On)
+	require.InDelta(t, 42, state.Power, 0.001)
+}
 
-	_, state, ok := pm.Plug("plug-1")
-	require.True(t, ok)
-	require.True(t, state.On)
+// A Power reply shows the plug as of the request, so a report received
+// while the request was out is newer and must survive it.
+func TestPowerReplyOlderThanReportDropped(t *testing.T) {
+	pm, _ := newTestManager(t)
+	held := &heldClient{calls: make(chan chan []byte)}
+	pm.plugs["plug-1"].Client = held
+
+	done := make(chan error)
+	go func() { done <- pm.SetPower(context.Background(), "plug-1", true) }()
+	reply := <-held.calls
+
+	off := false
+	pm.update("eventbus", "plug-1", func(s State) State {
+		return mergeEvent(s, StateChangedEvent{PlugID: "plug-1", Received: time.Now(), On: &off})
+	})
+
+	reply <- []byte(`{"POWER":"ON"}`)
+	require.NoError(t, <-done)
+
+	_, state, _ := pm.Plug("plug-1")
+	require.False(t, state.On, "Power reply overwrote a newer report")
 }
 
 func TestConfigureMQTTBacklog(t *testing.T) {
@@ -283,7 +345,7 @@ func TestStatusEnergyKeptPastNewerPowerReport(t *testing.T) {
 	off := false
 
 	s := mergeEvent(State{}, StateChangedEvent{Received: sent.Add(time.Second), On: &off})
-	s = applyStatus(s, statusReading{On: true, Energy: Energy{Power: 40}}, sent, sent.Add(2*time.Second))
+	s = applyStatus(s, statusReading{On: true, Energy: &Energy{Power: 40}}, sent, sent.Add(2*time.Second))
 
 	require.False(t, s.On)
 	require.InDelta(t, 40, s.Power, 0.001)
