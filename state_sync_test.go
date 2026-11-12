@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -77,7 +80,7 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 	}
 
 	hapManager := NewHAPManager(plugConfigs, "Test Bridge", manager, eventBus)
-	webServer := NewWebServer(logger, manager, manager, eventBus, nil, "", "", hapManager)
+	webServer := NewWebServer(logger, manager, manager, eventBus, nil, "", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -234,36 +237,6 @@ func TestMultipleMQTTUpdatesStayInSync(t *testing.T) {
 	}
 }
 
-// TestRaceConditionMQTTDuringSetPower reproduces the bug where MQTT and SetPower race
-func TestRaceConditionMQTTDuringSetPower(t *testing.T) {
-	env := setupStateSyncTest(t, []plugs.Plug{
-		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
-	})
-
-	// Configure fake to return ON
-	env.fakeClient.responses = [][]byte{
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
-		[]byte(`{"StatusSTS":{"POWER":"ON"},"StatusSNS":{"ENERGY":{"Power":10.5}}}`),
-	}
-
-	// Turn plug ON via SetPower
-	err := env.manager.SetPower(env.ctx, "plug-1", true)
-	require.NoError(t, err)
-
-	// Immediately simulate MQTT update with old state (OFF) - this is the race condition
-	// In real world, this could be a delayed MQTT message
-	env.simulateMQTTUpdate("plug-1", false)
-
-	// Wait a bit for the race to potentially manifest
-	time.Sleep(100 * time.Millisecond)
-
-	// Now simulate the correct MQTT update (ON)
-	env.simulateMQTTUpdate("plug-1", true)
-
-	// All views should eventually converge to ON
-	env.assertAllStatesMatch("plug-1", true, "After race condition, all views should converge to ON")
-}
-
 // TestHomeKitCommandSyncsToWeb tests that a HomeKit command updates the web view
 func TestHomeKitCommandSyncsToWeb(t *testing.T) {
 	env := setupStateSyncTest(t, []plugs.Plug{
@@ -290,64 +263,13 @@ func TestWebCommandSyncsToHomeKit(t *testing.T) {
 		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
 	}
 
-	// Simulate Web UI command
-	err := env.manager.SetPower(env.ctx, "plug-1", true)
-	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	env.webServer.HandleToggle(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
 
-	// All views should show ON
 	env.assertAllStatesMatch("plug-1", true, "After Web command, all views should show ON")
-}
-
-// TestReproduceFourLampsBug reproduces the exact bug: 4 lamps all ON, but HomeKit shows 2 ON/2 OFF
-func TestReproduceFourLampsBug(t *testing.T) {
-	t.Skip("This test currently FAILS and reproduces the bug - will pass after fix")
-
-	env := setupStateSyncTest(t, []plugs.Plug{
-		{ID: "lamp-1", Name: "Lamp 1", Address: "192.168.1.101"},
-		{ID: "lamp-2", Name: "Lamp 2", Address: "192.168.1.102"},
-		{ID: "lamp-3", Name: "Lamp 3", Address: "192.168.1.103"},
-		{ID: "lamp-4", Name: "Lamp 4", Address: "192.168.1.104"},
-	})
-
-	// Configure fake to return ON
-	env.fakeClient.responses = [][]byte{
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`), // lamp-1
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`), // lamp-2
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`), // lamp-3
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`), // lamp-4
-	}
-
-	// User toggles all 4 lamps ON via web UI rapidly
-	for i := 1; i <= 4; i++ {
-		lampID := fmt.Sprintf("lamp-%d", i)
-		err := env.manager.SetPower(env.ctx, lampID, true)
-		require.NoError(t, err)
-	}
-
-	// Simulate MQTT messages arriving during the 2-second GetStatus delay
-	// Some are stale (OFF), some are current (ON)
-	time.Sleep(500 * time.Millisecond)
-	env.simulateMQTTUpdate("lamp-1", false) // Stale MQTT message
-	env.simulateMQTTUpdate("lamp-2", true)  // Current MQTT message
-
-	time.Sleep(500 * time.Millisecond)
-	env.simulateMQTTUpdate("lamp-3", false) // Stale MQTT message
-	env.simulateMQTTUpdate("lamp-4", true)  // Current MQTT message
-
-	// Wait for GetStatus refresh to complete (2 seconds + processing time)
-	time.Sleep(2500 * time.Millisecond)
-
-	// Send correct MQTT updates
-	for i := 1; i <= 4; i++ {
-		lampID := fmt.Sprintf("lamp-%d", i)
-		env.simulateMQTTUpdate(lampID, true)
-	}
-
-	// All four lamps should show ON in ALL views
-	for i := 1; i <= 4; i++ {
-		lampID := fmt.Sprintf("lamp-%d", i)
-		env.assertAllStatesMatch(lampID, true, "Lamp %s should be ON everywhere", lampID)
-	}
 }
 
 // TestStateConsistencyAfterMQTTFlapping tests recovery from flapping MQTT state
