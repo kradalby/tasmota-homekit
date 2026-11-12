@@ -89,6 +89,7 @@ func setupStateSyncTest(t *testing.T, plugConfigs []plugs.Plug) *TestStateSyncEn
 	}
 
 	hapManager := NewHAPManager(plugConfigs, "Test Bridge", manager, eventBus)
+	t.Cleanup(hapManager.Close)
 	webServer := NewWebServer(logger, manager, manager, eventBus, nil, "", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -251,6 +252,35 @@ func TestHomeKitCommandSyncsToWeb(t *testing.T) {
 
 	// All views should show ON
 	env.assertAllStatesMatch("plug-1", true, "After HomeKit command, all views should show ON")
+}
+
+// Once the plug has confirmed a HomeKit write, a report from before the
+// command must not switch HomeKit back, while a newer one that disagrees
+// must reach it.
+func TestHomeKitWriteThenReports(t *testing.T) {
+	env := setupStateSyncTest(t, []plugs.Plug{
+		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
+		{ID: "plug-2", Name: "Barrier", Address: "192.168.1.101"},
+	})
+	client, err := env.eventBus.Client(events.ClientMQTT)
+	require.NoError(t, err)
+	pub := eventbus.Publish[plugs.StateChangedEvent](client)
+
+	beforeWrite := time.Now().Add(-time.Second)
+	require.Zero(t, homeKitWrite(env.hapManager, "plug-1", true))
+	env.hapManager.wg.Wait()
+	env.assertAllStatesMatch("plug-1", true)
+
+	off := false
+	pub.Publish(plugs.StateChangedEvent{PlugID: "plug-1", Received: beforeWrite, On: &off})
+	// Reports are merged and delivered in order, so once HAP sees plug-2 the
+	// late plug-1 report has been handled.
+	env.simulateMQTTUpdate("plug-2", true)
+	require.Eventually(t, func() bool { return env.getHAPState("plug-2") }, 2*time.Second, 10*time.Millisecond)
+	env.assertAllStatesMatch("plug-1", true, "late report undid a confirmed write")
+
+	env.simulateMQTTUpdate("plug-1", false)
+	env.assertAllStatesMatch("plug-1", false, "newer report never reached HomeKit")
 }
 
 // TestWebCommandSyncsToHomeKit tests that a Web UI command updates HomeKit

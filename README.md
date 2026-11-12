@@ -337,18 +337,26 @@ Features:
 ```
 
 - **PlugManager owns plug state.** It keeps one immutable snapshot of every
-  plug behind an atomic pointer. Each change (MQTT merge or `Status 0` reply)
-  builds a new snapshot, stores it and publishes a `StateUpdateEvent` under one
-  writer mutex, so subscribers see changes in the order they were stored.
-  `Snapshot()` and `Plug()` read without locking.
+  plug behind an atomic pointer. Each change (MQTT merge, `Power` or
+  `Status 0` reply) builds a new snapshot, stores it and publishes a
+  `StateUpdateEvent` under one writer mutex, so subscribers see changes in the
+  order they were stored. `Snapshot()` and `Plug()` read without locking.
 - **Newer observation wins.** Each reading carries when it was observed: an
-  MQTT report its receive time, a `Status 0` reply its request's send time.
-  Power state and energy are ordered separately; a reading older than the
-  stored one of its kind is dropped, so a report queued on the eventbus
-  cannot undo a newer reply. `LastSeen` and `LastUpdated` never move back.
-- **Commands are synchronous.** HomeKit and web writes call
-  `PlugManager.SetPower`, which sends `Power` and then reads `Status 0`. A
-  HomeKit write the plug rejects fails, so HomeKit keeps its old value.
+  MQTT report its receive time, a `Power` or `Status 0` reply its request's
+  send time. Power state and energy are ordered separately; a reading older
+  than the stored one of its kind is dropped, so a report queued on the
+  eventbus cannot undo a newer reply. `LastSeen` and `LastUpdated` never move
+  back.
+- **Switching takes one request.** `PlugManager.SetPower` sends `Power` and
+  stores the state the reply confirms; it fails when the reply does not
+  confirm the state asked for. Energy readings come from MQTT `SENSOR` reports
+  and `Status 0` refreshes.
+- **HomeKit writes are answered at once.** HAPManager accepts the write and
+  switches the plug in the background, so a scene's plugs switch together.
+  Each plug takes one command at a time and only the newest write is sent.
+  When it is done, HomeKit is set to the plug's state as the manager holds it,
+  so a failed or timed-out command (logged as `HomeKit command failed`) flips
+  the tile back to the last confirmed state. Web toggles wait for the plug.
 - **Views follow the snapshot.** HAPManager subscribes to state updates and
   then seeds its accessories from the snapshot; WebServer renders pages from
   the snapshot and starts each SSE stream with it before streaming updates.

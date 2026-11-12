@@ -20,7 +20,7 @@ This document mirrors `../nefit-homekit/NEFIT_IMPLEMENTATION.md` so both HomeKit
 - `app.go`: ties the pieces together, handles graceful shutdown, ensures MQTT + HTTP + HAP lifecycles stay synchronized.
 - `nix/`: exposes the package, overlay, and NixOS module with firewall + credential wiring.
 
-The plug manager owns plug state (see README, "Architecture"). It merges MQTT reports and `Status 0` replies into one immutable snapshot, keeping the newer observation, and publishes each change on the eventbus in the order it was stored. HAP applies those updates; the web dashboard reads the snapshot for pages and new SSE streams, then streams the updates. HomeKit and dashboard commands call the manager directly and return once the plug has answered.
+The plug manager owns plug state (see README, "Architecture"). It merges MQTT reports, `Power` replies and `Status 0` replies into one immutable snapshot, keeping the newer observation, and publishes each change on the eventbus in the order it was stored. HAP applies those updates; the web dashboard reads the snapshot for pages and new SSE streams, then streams the updates. Dashboard commands call the manager and return once the plug has answered; HomeKit writes are answered at once, switched in the background, and HomeKit is then set to the state the manager holds.
 
 ## Configuration surfaces
 

@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/brutella/hap/accessory"
@@ -241,7 +244,9 @@ func newHAPWithPlug(t *testing.T, client plugs.Client) (*HAPManager, *plugs.Mana
 	require.NoError(t, err)
 	pm.SetClientForTesting("plug-1", client)
 
-	return NewHAPManager(plugCfg, "Test Bridge", pm, eventBus), pm
+	hm := NewHAPManager(plugCfg, "Test Bridge", pm, eventBus)
+	t.Cleanup(hm.Close)
+	return hm, pm
 }
 
 func homeKitWrite(hm *HAPManager, plugID string, on bool) int {
@@ -250,13 +255,70 @@ func homeKitWrite(hm *HAPManager, plugID string, on bool) int {
 	return code
 }
 
-// A write the plug rejects must fail in HomeKit and leave the characteristic
-// alone; nothing would reset it later.
-func TestHAPWriteRejectedWhenPlugFails(t *testing.T) {
-	hm, _ := newHAPWithPlug(t, failingPlugClient{})
+// errorLog records the plug_id of each error logged while it is the default.
+type errorLog struct {
+	mu    sync.Mutex
+	plugs []string
+}
 
-	require.NotZero(t, homeKitWrite(hm, "plug-1", true))
-	require.False(t, hm.accessories["plug-1"].OnValue())
+func captureErrors(t *testing.T) *errorLog {
+	l := &errorLog{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(l))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return l
+}
+
+func (l *errorLog) Enabled(_ context.Context, level slog.Level) bool { return level >= slog.LevelError }
+func (l *errorLog) WithAttrs([]slog.Attr) slog.Handler               { return l }
+func (l *errorLog) WithGroup(string) slog.Handler                    { return l }
+
+func (l *errorLog) Handle(_ context.Context, r slog.Record) error {
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "plug_id" {
+			l.mu.Lock()
+			l.plugs = append(l.plugs, a.Value.String())
+			l.mu.Unlock()
+		}
+		return true
+	})
+	return nil
+}
+
+func (l *errorLog) plugIDs() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.plugs)
+}
+
+// heldPlug hands each command to the test, which answers it when it chooses.
+type heldPlug chan heldCall
+
+type heldCall struct {
+	cmd   string
+	reply chan []byte // nil fails the command
+}
+
+func (p heldPlug) ExecuteCommand(ctx context.Context, cmd string) ([]byte, error) {
+	reply := make(chan []byte)
+	select {
+	case p <- heldCall{cmd, reply}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case b := <-reply:
+		if b == nil {
+			return nil, errors.New("unreachable")
+		}
+		return b, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p heldPlug) ExecuteBacklog(ctx context.Context, _ ...string) ([]byte, error) {
+	return p.ExecuteCommand(ctx, "Backlog")
 }
 
 func TestHAPWriteAppliedWhenPlugAccepts(t *testing.T) {
@@ -266,8 +328,91 @@ func TestHAPWriteAppliedWhenPlugAccepts(t *testing.T) {
 	require.True(t, hm.accessories["plug-1"].OnValue())
 	require.Equal(t, uint64(1), hm.incomingCommands.Load())
 
+	hm.wg.Wait()
+	require.True(t, hm.accessories["plug-1"].OnValue())
 	_, state, _ := pm.Plug("plug-1")
 	require.True(t, state.On)
+}
+
+// HomeKit's write is accepted before the plug answers. When the plug does
+// not take it, the failure is logged and HomeKit is set back to the plug's
+// last confirmed state; the manager publishes only changes, so nothing else
+// would undo the written value.
+func TestHAPFailedWriteRestoresPlugState(t *testing.T) {
+	errs := captureErrors(t)
+	hm, pm := newHAPWithPlug(t, &fakePlugClient{})
+	require.Zero(t, homeKitWrite(hm, "plug-1", true))
+	hm.wg.Wait()
+
+	pm.SetClientForTesting("plug-1", failingPlugClient{})
+	require.Zero(t, homeKitWrite(hm, "plug-1", false))
+	require.False(t, hm.accessories["plug-1"].OnValue())
+
+	hm.wg.Wait()
+	require.True(t, hm.accessories["plug-1"].OnValue(), "HomeKit kept a state the plug did not take")
+	require.Equal(t, []string{"plug-1"}, errs.plugIDs())
+}
+
+// hungPlug never answers; only the command's deadline ends it.
+type hungPlug struct{}
+
+func (hungPlug) ExecuteCommand(ctx context.Context, _ string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (hungPlug) ExecuteBacklog(ctx context.Context, _ ...string) ([]byte, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A plug that never answers holds its command only until hapWriteTimeout,
+// after which HomeKit is set back.
+func TestHAPTimedOutWriteRestoresPlugState(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		hm, _ := newHAPWithPlug(t, hungPlug{})
+
+		start := time.Now()
+		require.Zero(t, homeKitWrite(hm, "plug-1", true))
+		hm.wg.Wait()
+
+		require.Equal(t, hapWriteTimeout, time.Since(start))
+		require.False(t, hm.accessories["plug-1"].OnValue())
+	})
+}
+
+// HomeKit switches a plug on and straight back off while the plug is slow
+// to take the first command. The plug and HomeKit must both end up off,
+// whether that slow command then succeeds or fails.
+func TestHAPLastWriteWins(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		firstReply []byte
+	}{
+		{"slow command succeeds", []byte(`{"POWER":"ON"}`)},
+		{"slow command fails", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plug := make(heldPlug)
+			hm, pm := newHAPWithPlug(t, plug)
+
+			require.Zero(t, homeKitWrite(hm, "plug-1", true))
+			first := <-plug
+			require.Equal(t, "Power ON", first.cmd)
+
+			require.Zero(t, homeKitWrite(hm, "plug-1", false))
+			first.reply <- tc.firstReply
+
+			second := <-plug
+			require.Equal(t, "Power OFF", second.cmd)
+			second.reply <- []byte(`{"POWER":"OFF"}`)
+			hm.wg.Wait()
+
+			require.False(t, hm.accessories["plug-1"].OnValue())
+			_, state, _ := pm.Plug("plug-1")
+			require.False(t, state.On)
+		})
+	}
 }
 
 // A change stored before HomeKit subscribes is never published to it, so
@@ -284,5 +429,6 @@ func TestHAPStartsFromManagerState(t *testing.T) {
 	require.NoError(t, err)
 
 	hm := NewHAPManager(plugCfg, "Test Bridge", pm, eventBus)
+	t.Cleanup(hm.Close)
 	require.True(t, hm.accessories["plug-1"].OnValue())
 }
