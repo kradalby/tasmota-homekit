@@ -649,27 +649,35 @@ func (ws *WebServer) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		close(clientChan)
 	}()
 
-	// Send current snapshot immediately.
+	// write reports false once the client is gone.
+	write := func(evt events.StateUpdateEvent) bool {
+		payload, err := json.Marshal(evt)
+		if err != nil {
+			ws.logger.Error("Failed to marshal SSE payload", slog.Any("error", err))
+			return true
+		}
+
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	// The snapshot bypasses clientChan: it can hold more plugs than the
+	// channel's buffer, and nothing reads the channel yet.
 	for _, evt := range ws.snapshotState() {
-		select {
-		case clientChan <- evt:
-		default:
+		if !write(evt) {
+			return
 		}
 	}
 
 	for {
 		select {
 		case evt := <-clientChan:
-			payload, err := json.Marshal(evt)
-			if err != nil {
-				ws.logger.Error("Failed to marshal SSE payload", slog.Any("error", err))
-				continue
-			}
-
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			if !write(evt) {
 				return
 			}
-			flusher.Flush()
 
 		case <-r.Context().Done():
 			return

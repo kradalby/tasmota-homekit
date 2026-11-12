@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -389,6 +390,33 @@ func TestHandleSSE(t *testing.T) {
 	if evt.PlugID != "plug-1" || !evt.On {
 		t.Fatalf("unexpected SSE event: %+v", evt)
 	}
+}
+
+// The first frames must carry every plug, not only what fits the client's
+// live-update buffer.
+func TestHandleSSESnapshotHasEveryPlug(t *testing.T) {
+	ws, provider, _, _ := newTestWebServer(t)
+	for i := range 20 {
+		addPlug(provider, plugs.Plug{ID: fmt.Sprintf("extra-%02d", i)}, plugs.State{})
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ws.HandleSSE(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/events", nil))
+	}()
+
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		body := rec.body()
+		for id := range provider.items {
+			assert.Contains(c, body, `"plug_id":"`+id+`"`)
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	<-done
 }
 
 func TestHandleEventBusDebugShowsStatuses(t *testing.T) {
