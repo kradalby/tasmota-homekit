@@ -2,6 +2,7 @@ package plugs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -203,6 +204,40 @@ func TestCheckMQTT(t *testing.T) {
 			_, state, _ := pm.Plug("plug-1")
 			require.True(t, state.On)
 		})
+	}
+}
+
+// Every failed plug request is published once as an ErrorEvent, which the
+// metrics collector counts.
+func TestFailuresPublishErrorEvents(t *testing.T) {
+	pm, fake := newTestManager(t)
+	client, err := pm.eventBus.Client(events.ClientMetrics)
+	require.NoError(t, err)
+	sub := eventbus.Subscribe[ErrorEvent](client)
+	t.Cleanup(sub.Close)
+
+	ctx := context.Background()
+	fake.responses = [][]byte{[]byte(`{"POWER":"OFF"}`)}
+	require.Error(t, pm.SetPower(ctx, "plug-1", true), "plug answered another state")
+
+	fake.err = errors.New("unreachable")
+	require.Error(t, pm.SetPower(ctx, "plug-1", true))
+	_, err = pm.GetStatus(ctx, "plug-1")
+	require.Error(t, err)
+	require.Error(t, pm.checkMQTT(ctx, "plug-1", "10.0.0.2", 1883))
+
+	for i := range 4 {
+		select {
+		case evt := <-sub.Events():
+			require.Equal(t, "plug-1", evt.PlugID)
+		case <-time.After(time.Second):
+			t.Fatalf("got %d of 4 error events", i)
+		}
+	}
+	select {
+	case evt := <-sub.Events():
+		t.Fatalf("failure published twice: %v", evt.Error)
+	default:
 	}
 }
 
