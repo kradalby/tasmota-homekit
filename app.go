@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -351,12 +350,7 @@ func Main() {
 	webServer.Start(ctx)
 	defer webServer.Close()
 
-	kraWeb.Handle("/", http.HandlerFunc(webServer.HandleIndex))
-	kraWeb.Handle("/toggle/", http.HandlerFunc(webServer.HandleToggle))
-	kraWeb.Handle("/events", http.HandlerFunc(webServer.HandleSSE))
-	kraWeb.Handle("/health", http.HandlerFunc(webServer.HandleHealth))
-	kraWeb.Handle("/qrcode", http.HandlerFunc(webServer.HandleQRCode))
-	kraWeb.Handle("/debug/eventbus", http.HandlerFunc(webServer.HandleEventBusDebug))
+	webServer.registerRoutes(kraWeb)
 
 	// Setup debug handlers with tsweb.Debugger
 	SetupDebugHandlers(kraWeb, hapManager)

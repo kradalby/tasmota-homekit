@@ -3,6 +3,7 @@ package tasmotahomekit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -144,35 +146,159 @@ func TestHandleIndex(t *testing.T) {
 	}
 }
 
-func TestHandleToggleCallsSetPower(t *testing.T) {
-	ws, _, controller, _ := newTestWebServer(t)
+func addPlug(f *fakePlugProvider, p plugs.Plug, s plugs.State) {
+	s.ID = p.ID
+	f.items[p.ID] = struct {
+		Plug  plugs.Plug
+		State plugs.State
+	}{p, s}
+}
 
-	called := false
-	controller.setPowerFunc = func(ctx context.Context, plugID string, on bool) error {
-		called = true
-		if plugID != "plug-1" {
-			t.Errorf("plugID = %s, want plug-1", plugID)
-		}
-		if !on {
-			t.Errorf("on = %v, want true", on)
-		}
-		return nil
+func TestRoutes(t *testing.T) {
+	ws, _, _, _ := newTestWebServer(t)
+	mux := http.NewServeMux()
+	ws.registerRoutes(mux)
+
+	// /events streams until the request ends.
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	tests := []struct {
+		method   string
+		path     string
+		wantCode int
+		wantType string
+		wantBody string
+	}{
+		{http.MethodGet, "/", http.StatusOK, "text/html", "Tasmota HomeKit Bridge"},
+		{http.MethodPost, "/toggle/plug-1", http.StatusSeeOther, "", ""},
+		{http.MethodGet, "/events", http.StatusOK, "text/event-stream", ""},
+		{http.MethodGet, "/health", http.StatusOK, "application/json", `"status":"ok"`},
+		{http.MethodGet, "/qrcode", http.StatusOK, "text/plain", "00102003"},
+		{http.MethodGet, "/debug/eventbus", http.StatusOK, "text/html", "EventBus Debug"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequestWithContext(ended, tt.method, tt.path, nil))
 
-	req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("HX-Request", "true")
+			assert.Equal(t, tt.wantCode, rec.Code)
+			assert.Contains(t, rec.Header().Get("Content-Type"), tt.wantType)
+			assert.Contains(t, rec.Body.String(), tt.wantBody)
+		})
+	}
+}
+
+func TestHandleToggle(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		form     string
+		htmx     bool
+		setErr   error
+		wantCode int
+		wantOn   *bool // nil: SetPower must not be called
+	}{
+		{"on", http.MethodPost, "/toggle/plug-1", "action=on", true, nil, http.StatusOK, new(true)},
+		{"off", http.MethodPost, "/toggle/plug-1", "action=off", true, nil, http.StatusOK, new(false)},
+		{"missing action turns off", http.MethodPost, "/toggle/plug-1", "", true, nil, http.StatusOK, new(false)},
+		{"non-htmx redirects", http.MethodPost, "/toggle/plug-1", "action=on", false, nil, http.StatusSeeOther, new(true)},
+		{"unknown plug", http.MethodPost, "/toggle/nope", "action=on", true, nil, http.StatusNotFound, nil},
+		{"web disabled plug", http.MethodPost, "/toggle/hidden", "action=on", true, nil, http.StatusNotFound, nil},
+		{"set power fails", http.MethodPost, "/toggle/plug-1", "action=on", true, errors.New("unreachable"), http.StatusInternalServerError, new(true)},
+		{"wrong method", http.MethodGet, "/toggle/plug-1", "", true, nil, http.StatusMethodNotAllowed, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws, provider, controller, _ := newTestWebServer(t)
+			addPlug(provider, plugs.Plug{ID: "hidden", Name: "Hidden", Web: new(false)}, plugs.State{})
+
+			var gotOn *bool
+			controller.setPowerFunc = func(_ context.Context, plugID string, on bool) error {
+				assert.Equal(t, "plug-1", plugID)
+				gotOn = &on
+				return tt.setErr
+			}
+
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tt.htmx {
+				req.Header.Set("HX-Request", "true")
+			}
+			rec := httptest.NewRecorder()
+
+			ws.HandleToggle(rec, req)
+
+			assert.Equal(t, tt.wantCode, rec.Code)
+			assert.Equal(t, tt.wantOn, gotOn)
+			switch tt.wantCode {
+			case http.StatusOK:
+				assert.Contains(t, rec.Body.String(), `id="plug-plug-1"`, "htmx gets the card back")
+			case http.StatusSeeOther:
+				assert.Equal(t, "/", rec.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+func TestHandleIndexHidesWebDisabledPlugs(t *testing.T) {
+	ws, provider, _, _ := newTestWebServer(t)
+	addPlug(provider, plugs.Plug{ID: "hidden", Name: "Hidden Plug", Web: new(false)}, plugs.State{})
+	addPlug(provider, plugs.Plug{ID: "shown", Name: "Shown Plug", Web: new(true)}, plugs.State{})
+
 	rec := httptest.NewRecorder()
+	ws.HandleIndex(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	ws.HandleToggle(rec, req)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Test Plug", "unset web flag means shown")
+	assert.Contains(t, body, "Shown Plug")
+	assert.NotContains(t, body, "Hidden Plug")
+}
 
-	if !called {
-		t.Fatal("SetPower was not called")
+func TestPlugCardPowerStats(t *testing.T) {
+	state := plugs.State{ID: "plug-1", Power: 12.34, Voltage: 230, Current: 0.054, Energy: 1.2345}
+
+	metered := new(WebServer).renderPlugCard("plug-1", plugs.Plug{
+		ID:       "plug-1",
+		Features: &plugs.PlugFeatures{PowerMonitoring: true},
+	}, state).Render()
+	for _, want := range []string{"12.3 W", "230.0 V", "0.05 A", "1.234 kWh"} {
+		assert.Contains(t, metered, want)
 	}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d; want 200", rec.Code)
-	}
+	plain := new(WebServer).renderPlugCard("plug-1", plugs.Plug{ID: "plug-1"}, state).Render()
+	assert.NotContains(t, plain, "electrical-stats")
+}
+
+// The card and plugs.State.Event each derive connection state from LastSeen
+// and must agree on the cut-offs. synctest freezes the clock so the
+// boundaries are exact.
+func TestConnectionThresholds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tests := []struct {
+			lastSeen time.Time
+			want     string
+			wantNote string
+		}{
+			{time.Time{}, "disconnected", "Never seen"},
+			{time.Now().Add(-29 * time.Second), "connected", "Last seen: 29s ago"},
+			{time.Now().Add(-30 * time.Second), "stale", "Last seen: 30s ago"},
+			{time.Now().Add(-59 * time.Second), "stale", "Last seen: 59s ago"},
+			{time.Now().Add(-60 * time.Second), "disconnected", "Last seen: 1m0s ago"},
+		}
+		for _, tt := range tests {
+			state := plugs.State{ID: "plug-1", LastSeen: tt.lastSeen}
+
+			card := new(WebServer).renderPlugCard("plug-1", plugs.Plug{ID: "plug-1"}, state).Render()
+			assert.Contains(t, card, `connection-indicator `+tt.want+`"`, tt.wantNote)
+			assert.Contains(t, card, tt.wantNote)
+
+			evt := state.Event("test")
+			assert.Equal(t, tt.want, evt.ConnectionState, tt.wantNote)
+			assert.Equal(t, tt.wantNote, evt.ConnectionNote)
+		}
+	})
 }
 
 // flushRecorder wraps httptest.ResponseRecorder so the SSE handler can call
@@ -282,20 +408,12 @@ func TestHandleEventBusDebugShowsStatuses(t *testing.T) {
 		Status:    events.ConnectionStatusConnected,
 	})
 
-	time.Sleep(20 * time.Millisecond)
-
-	req := httptest.NewRequest(http.MethodGet, "/debug/eventbus", nil)
-	rec := httptest.NewRecorder()
-
-	ws.HandleEventBusDebug(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "Component Status") {
-		t.Fatalf("expected component status table, got %q", body)
-	}
-	if !strings.Contains(body, "hap") {
-		t.Fatalf("expected component entry in debug output, got %q", body)
-	}
+	// Delivery is asynchronous; poll the page until the status lands.
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		rec := httptest.NewRecorder()
+		ws.HandleEventBusDebug(rec, httptest.NewRequest(http.MethodGet, "/debug/eventbus", nil))
+		assert.Contains(c, rec.Body.String(), "<td>hap</td><td>connected</td>")
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestHandleHealth(t *testing.T) {

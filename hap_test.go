@@ -110,27 +110,37 @@ func TestHAPManagerAccessoryOrderStable(t *testing.T) {
 		{ID: "plug-3", Name: "Third Plug", Address: "1.2.3.6"},
 	}
 
-	newManager := func() *HAPManager {
-		eventBus := newTestEventsBus(t)
-		return NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, eventBus)
+	// HomeKit keys pairings, rooms and automations on these IDs; a new
+	// derivation orphans every one of them.
+	wantIDs := map[string]uint64{
+		"plug-1": 17220761463179327959,
+		"plug-2": 17220762562690956170,
+		"plug-3": 17220763662202584381,
 	}
 
-	hm1 := newManager()
-	hm2 := newManager()
-
-	acc1 := hm1.GetAccessories()
-	acc2 := hm2.GetAccessories()
-
-	require.Len(t, acc1, len(plugCfg)+1)
-	require.Len(t, acc2, len(plugCfg)+1)
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, newTestEventsBus(t))
+	acc := hm.GetAccessories()
+	require.Len(t, acc, len(plugCfg)+1)
 
 	for i, plug := range plugCfg {
-		accessoryIndex := i + 1 // Skip bridge at index 0
-		require.Equal(t, plug.Name, acc1[accessoryIndex].Info.Name.Value())
-		require.Equal(t, plug.Name, acc2[accessoryIndex].Info.Name.Value())
-		require.Equal(t, acc1[accessoryIndex].Id, acc2[accessoryIndex].Id, "accessory IDs must remain stable")
-		require.Equal(t, hashString(plug.ID), acc1[accessoryIndex].Id, "hash mismatch for plug %s", plug.ID)
+		got := acc[i+1] // bridge is first
+		require.Equal(t, plug.Name, got.Info.Name.Value())
+		require.Equal(t, wantIDs[plug.ID], got.Id, "accessory ID for %s", plug.ID)
 	}
+}
+
+func TestHAPManagerSkipsHomeKitDisabledPlugs(t *testing.T) {
+	plugCfg := []plugs.Plug{
+		{ID: "plug-1", Name: "Shown", Address: "1.2.3.4"},
+		{ID: "plug-2", Name: "Hidden", Address: "1.2.3.5", HomeKit: new(false)},
+	}
+
+	hm := NewHAPManager(plugCfg, "Test Bridge", noPlugs{}, newTestEventsBus(t))
+
+	acc := hm.GetAccessories()
+	require.Len(t, acc, 2)
+	require.Equal(t, "Shown", acc[1].Info.Name.Value())
+	require.NotContains(t, hm.accessories, "plug-2")
 }
 
 func TestHAPManagerPublishesCommandEvents(t *testing.T) {
