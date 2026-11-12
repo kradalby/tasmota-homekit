@@ -271,9 +271,10 @@ func TestPlugCardPowerStats(t *testing.T) {
 	assert.NotContains(t, plain, "electrical-stats")
 }
 
-// The card and plugs.State.Event each derive connection state from LastSeen
-// and must agree on the cut-offs. synctest freezes the clock so the
-// boundaries are exact.
+// The card and plugs.State.Event show a plug as connected for as long as
+// MonitorConnections leaves it alone: plugs report only every TelePeriod,
+// so a healthy one must not be shown as lost between reports. synctest
+// freezes the clock so the boundaries are exact.
 func TestConnectionThresholds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		tests := []struct {
@@ -282,10 +283,9 @@ func TestConnectionThresholds(t *testing.T) {
 			wantNote string
 		}{
 			{time.Time{}, "disconnected", "Never seen"},
-			{time.Now().Add(-29 * time.Second), "connected", "Last seen: 29s ago"},
-			{time.Now().Add(-30 * time.Second), "stale", "Last seen: 30s ago"},
-			{time.Now().Add(-59 * time.Second), "stale", "Last seen: 59s ago"},
-			{time.Now().Add(-60 * time.Second), "disconnected", "Last seen: 1m0s ago"},
+			{time.Now().Add(-5 * time.Minute), "connected", "Last seen: 5m0s ago"},
+			{time.Now().Add(-10 * time.Minute), "connected", "Last seen: 10m0s ago"},
+			{time.Now().Add(-10*time.Minute - time.Second), "disconnected", "Last seen: 10m1s ago"},
 		}
 		for _, tt := range tests {
 			state := plugs.State{ID: "plug-1", LastSeen: tt.lastSeen}

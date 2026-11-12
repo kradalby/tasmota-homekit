@@ -244,11 +244,14 @@ Run the flake apps (`nix run .#test`, `nix run .#test-race`, `nix run .#lint`, `
 
 ## How It Works
 
-1. **Startup**: Server connects to all configured Tasmota plugs and configures them to use the embedded MQTT broker
-2. **Monitoring**: Background process validates plugs connect to MQTT within 60 seconds
-   - If a plug never connects, attempts automatic reconfiguration
-   - Ongoing monitoring detects plugs that go offline and validates connectivity
-   - Automatically reconfigures MQTT if plug is reachable via HTTP but not MQTT
+1. **Startup**: Server reads every plug's `Status 0` for its state and MQTT
+   settings, and sends only the settings that differ from the embedded broker
+   (`MqttHost`, `MqttPort`, `Topic tasmota/<id>`). Tasmota restarts on those
+   commands, so a plug that already points at the broker gets none, and no
+   plug is reconfigured more than once per run.
+2. **Monitoring**: A plug not heard on MQTT for 10 minutes (twice Tasmota's
+   default `TelePeriod`), or never heard, is checked the same way every 10
+   minutes.
 3. **Control**: Commands from HomeKit/Web UI are sent directly via HTTP for low latency
 4. **Updates**: Plug state changes (button presses, power events) are published via MQTT
 5. **Sync**: All interfaces stay synchronized through the event bus
@@ -303,9 +306,8 @@ Features:
 - View all configured plugs and their current state
 - Toggle plugs on/off with a single click
 - **Connection monitoring**: Visual indicators show plug connectivity status
-  - Green: Connected (seen in last 30s)
-  - Orange: Stale (seen 30-60s ago)
-  - Red: Disconnected (not seen in 60+ seconds)
+  - Green: Connected (heard on MQTT in the last 10 minutes)
+  - Red: Disconnected (never heard, or silent for longer)
 - **Lifecycle table**: `/debug/eventbus` renders MQTT/HAP/Web status rows so you can confirm which components are connected without tailing logs.
 - See recent events and state changes
 - **Real-time automatic updates** via Server-Sent Events (SSE)

@@ -37,6 +37,8 @@ type Manager struct {
 type Info struct {
 	Config Plug
 	Client Client
+
+	reconfigured atomic.Bool // MQTT settings were sent this run
 }
 
 // Client is the interface for communicating with a Tasmota device.
@@ -109,31 +111,43 @@ func NewManager(
 	return pm, nil
 }
 
-// ConfigureMQTT configures a plug to use the specified MQTT broker.
-func (pm *Manager) ConfigureMQTT(ctx context.Context, plugID, brokerHost string, brokerPort int) error {
-	info, exists := pm.plugs[plugID]
-	if !exists {
-		return fmt.Errorf("plug %s not found", plugID)
+// checkMQTT reads plugID's status, which also refreshes its state, and sends
+// only the MQTT settings that differ from the broker's: Tasmota restarts on
+// MqttHost and MqttPort even when the value is unchanged. A plug is
+// reconfigured at most once per run, so one that stores a value other than
+// the one sent is not restarted on every check.
+func (pm *Manager) checkMQTT(ctx context.Context, plugID, host string, port int) error {
+	r, _, err := pm.status(ctx, plugID)
+	if err != nil {
+		return err
+	}
+	if r.MQTT == nil {
+		return fmt.Errorf("status has no StatusMQT")
 	}
 
-	slog.Info(
-		"Configuring MQTT for plug",
-		"plug_id", plugID,
-		"broker", brokerHost,
-		"port", brokerPort,
-	)
-
-	commands := []string{
-		fmt.Sprintf("MqttHost %s", brokerHost),
-		fmt.Sprintf("MqttPort %d", brokerPort),
-		fmt.Sprintf("Topic tasmota/%s", plugID),
+	var cmds []string
+	if r.MQTT.Host != host {
+		cmds = append(cmds, "MqttHost "+host)
+	}
+	if r.MQTT.Port != port {
+		cmds = append(cmds, fmt.Sprintf("MqttPort %d", port))
+	}
+	if topic := "tasmota/" + plugID; r.MQTT.Topic != topic {
+		cmds = append(cmds, "Topic "+topic)
+	}
+	if len(cmds) == 0 {
+		slog.Info("Plug MQTT settings point at the broker", "plug_id", plugID)
+		return nil
 	}
 
-	if _, err := info.Client.ExecuteBacklog(ctx, commands...); err != nil {
+	info := pm.plugs[plugID]
+	if !info.reconfigured.CompareAndSwap(false, true) {
+		return fmt.Errorf("MQTT settings still differ after reconfiguring, not restarting again: %v", cmds)
+	}
+	slog.Info("Pointing plug at the MQTT broker, it will restart", "plug_id", plugID, "commands", cmds)
+	if _, err := info.Client.ExecuteBacklog(ctx, cmds...); err != nil {
 		return fmt.Errorf("failed to configure MQTT: %w", err)
 	}
-
-	slog.Info("MQTT configured for plug", "plug_id", plugID)
 	return nil
 }
 
@@ -142,16 +156,6 @@ func (pm *Manager) SetPower(ctx context.Context, plugID string, on bool) error {
 	info, exists := pm.plugs[plugID]
 	if !exists {
 		return fmt.Errorf("plug %s not found", plugID)
-	}
-
-	state := (*pm.states.Load())[plugID]
-	if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 60*time.Second {
-		slog.Warn(
-			"Attempting to control plug that hasn't been seen recently",
-			"id", plugID,
-			"last_seen", state.LastSeen,
-			"time_since", time.Since(state.LastSeen).Round(time.Second),
-		)
 	}
 
 	command := "Power OFF"
@@ -206,42 +210,67 @@ func parsePower(reply []byte) (bool, error) {
 
 // GetStatus fetches the current status of a plug.
 func (pm *Manager) GetStatus(ctx context.Context, plugID string) (*State, error) {
+	_, state, err := pm.status(ctx, plugID)
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// status asks plugID for Status 0 and stores the state it reports.
+func (pm *Manager) status(ctx context.Context, plugID string) (statusReading, State, error) {
 	info, exists := pm.plugs[plugID]
 	if !exists {
-		return nil, fmt.Errorf("plug %s not found", plugID)
+		return statusReading{}, State{}, fmt.Errorf("plug %s not found", plugID)
 	}
 
 	sent := time.Now()
 	response, err := info.Client.ExecuteCommand(ctx, "Status 0")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get status: %w", err)
+		return statusReading{}, State{}, fmt.Errorf("failed to get status: %w", err)
 	}
 
 	slog.Debug("Raw Tasmota Status response", "plug_id", plugID, "response", string(response))
 
 	reading, err := parseStatus(response)
 	if err != nil {
-		return nil, err
+		return statusReading{}, State{}, err
 	}
 
 	state, _ := pm.update("status", plugID, func(s State) State {
 		return applyStatus(s, reading, sent, time.Now())
 	})
 
-	return &state, nil
+	return reading, state, nil
 }
 
 // statusReading is what a plug's reply says about it. Energy is nil when the
-// reply carries none, as a reply to Power never does.
+// reply carries none, as a reply to Power never does; MQTT is nil when it
+// has no StatusMQT.
 type statusReading struct {
 	On     bool
 	Energy *Energy
+	MQTT   *mqttSettings
+}
+
+// mqttSettings are where a plug's MQTT client publishes.
+type mqttSettings struct {
+	Host  string
+	Port  int
+	Topic string
 }
 
 func parseStatus(response []byte) (statusReading, error) {
 	// Status.Power is left out: its encoding differs between firmware
 	// versions, and StatusSTS.POWER carries the same bit.
 	var statusResp struct {
+		Status struct {
+			Topic string `json:"Topic"`
+		} `json:"Status"`
+		StatusMQT *struct {
+			MqttHost string `json:"MqttHost"`
+			MqttPort int    `json:"MqttPort"`
+		} `json:"StatusMQT"`
 		StatusSTS struct {
 			Power string `json:"POWER"`
 		} `json:"StatusSTS"`
@@ -257,10 +286,14 @@ func parseStatus(response []byte) (statusReading, error) {
 		return statusReading{}, fmt.Errorf("status has no StatusSTS.POWER")
 	}
 
-	return statusReading{
+	r := statusReading{
 		On:     statusResp.StatusSTS.Power == "ON",
 		Energy: statusResp.StatusSNS.Energy,
-	}, nil
+	}
+	if m := statusResp.StatusMQT; m != nil {
+		r.MQTT = &mqttSettings{Host: m.MqttHost, Port: m.MqttPort, Topic: statusResp.Status.Topic}
+	}
+	return r, nil
 }
 
 // applyStatus folds a reply to a request sent at sent into s. The reply
@@ -382,93 +415,44 @@ func (pm *Manager) update(source, plugID string, f func(State) State) (State, bo
 	return next, true
 }
 
-// MonitorConnections monitors plug connections and reconfigures MQTT when needed.
+// silentAfter is how long a plug may go unheard on MQTT before it is checked
+// and shown as disconnected. Tasmota reports at least every TelePeriod (300 s
+// by default); twice that rides out one lost report.
+const silentAfter = 10 * time.Minute
+
+// MonitorConnections checks every plug at once, which also reads its initial
+// state, and then each silentAfter checks the plugs that have gone silent.
 func (pm *Manager) MonitorConnections(ctx context.Context, brokerHost string, brokerPort int) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(silentAfter)
 	defer ticker.Stop()
 
-	initialConfigTime := time.Now()
-	initialCheckDone := false
-
+	now := time.Now()
 	for {
+		pm.checkConnections(ctx, now, brokerHost, brokerPort)
 		select {
-		case <-ticker.C:
-			if !initialCheckDone && time.Since(initialConfigTime) > 60*time.Second {
-				initialCheckDone = true
-				for plugID, item := range pm.Snapshot() {
-					if item.State.LastSeen.IsZero() {
-						slog.Warn(
-							"Plug has never connected to MQTT, attempting reconfiguration",
-							"plug_id", plugID,
-							"time_since_startup", time.Since(initialConfigTime).Round(time.Second),
-						)
-						if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
-							slog.Error(
-								"Failed to reconfigure MQTT for offline plug",
-								"plug_id", plugID,
-								"error", err,
-							)
-							pm.errorPublisher.Publish(ErrorEvent{
-								PlugID: plugID,
-								Error:  fmt.Errorf("plug never connected, reconfiguration failed: %w", err),
-							})
-						} else {
-							if _, err := pm.GetStatus(ctx, plugID); err != nil {
-								slog.Error(
-									"Plug not reachable via HTTP",
-									"plug_id", plugID,
-									"error", err,
-								)
-							}
-						}
-					}
-				}
-			}
-
-			if initialCheckDone {
-				for plugID, item := range pm.Snapshot() {
-					state := item.State
-					if !state.LastSeen.IsZero() && time.Since(state.LastSeen) > 120*time.Second {
-						timeSince := time.Since(state.LastSeen).Round(time.Second)
-
-						slog.Warn(
-							"Plug hasn't been seen in a while, checking connectivity",
-							"plug_id", plugID,
-							"time_since_last_seen", timeSince,
-						)
-
-						if _, err := pm.GetStatus(ctx, plugID); err != nil {
-							slog.Error(
-								"Plug not reachable via HTTP",
-								"plug_id", plugID,
-								"error", err,
-								"time_since_last_seen", timeSince,
-							)
-							pm.errorPublisher.Publish(ErrorEvent{
-								PlugID: plugID,
-								Error:  fmt.Errorf("plug unreachable for %s: %w", timeSince, err),
-							})
-						} else {
-							slog.Info(
-								"Plug reachable via HTTP but not MQTT, reconfiguring",
-								"plug_id", plugID,
-							)
-							if err := pm.ConfigureMQTT(ctx, plugID, brokerHost, brokerPort); err != nil {
-								slog.Error(
-									"Failed to reconfigure MQTT",
-									"plug_id", plugID,
-									"error", err,
-								)
-							}
-						}
-					}
-				}
-			}
-
+		case now = <-ticker.C:
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// checkConnections runs checkMQTT on every plug not heard on MQTT within
+// silentAfter of now. A plug never heard counts as silent, so it is checked
+// on every tick until it reports rather than given up on.
+func (pm *Manager) checkConnections(ctx context.Context, now time.Time, host string, port int) {
+	var wg sync.WaitGroup
+	for id := range pm.plugs {
+		if _, s, _ := pm.Plug(id); now.Sub(s.LastSeen) <= silentAfter {
+			continue
+		}
+		wg.Go(func() {
+			if err := pm.checkMQTT(ctx, id, host, port); err != nil {
+				slog.Warn("Failed to check plug MQTT settings", "plug_id", id, "error", err)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 // Snapshot returns a copy of all plug configs and states.
@@ -520,7 +504,7 @@ func (pm *Manager) publishStateUpdate(source string, state State) {
 
 // Event renders s as the update web and HAP subscribers receive.
 func (s State) Event(source string) events.StateUpdateEvent {
-	connectionState, connectionNote := connectionStatus(s.LastSeen)
+	connectionState, connectionNote := Connection(s.LastSeen)
 
 	return events.StateUpdateEvent{
 		Timestamp:       time.Now(),
@@ -540,20 +524,19 @@ func (s State) Event(source string) events.StateUpdateEvent {
 	}
 }
 
-func connectionStatus(lastSeen time.Time) (string, string) {
+// Connection describes a plug last heard on MQTT at lastSeen. It counts as
+// connected for as long as MonitorConnections leaves it alone.
+func Connection(lastSeen time.Time) (state, note string) {
 	if lastSeen.IsZero() {
 		return "disconnected", "Never seen"
 	}
 
 	since := time.Since(lastSeen)
-	switch {
-	case since < 30*time.Second:
-		return "connected", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
-	case since < 60*time.Second:
-		return "stale", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
-	default:
-		return "disconnected", fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	note = fmt.Sprintf("Last seen: %s ago", since.Round(time.Second))
+	if since > silentAfter {
+		return "disconnected", note
 	}
+	return "connected", note
 }
 
 // SetClientForTesting replaces the client for a plug (for testing only).

@@ -92,12 +92,6 @@ func Main() {
 		}
 	}()
 
-	appClient, err := eventBus.Client(events.ClientMetrics)
-	if err != nil {
-		slog.Error("Failed to get metrics client", "error", err)
-		os.Exit(1)
-	}
-	errorPublisher := eventbus.Publish[plugs.ErrorEvent](appClient)
 	metricsCollector, err := metrics.NewCollector(ctx, logger, eventBus, nil)
 	if err != nil {
 		slog.Error("Failed to initialize metrics collector", "error", err)
@@ -156,76 +150,28 @@ func Main() {
 		Status:    events.ConnectionStatusConnecting,
 	})
 
-	go func() {
-		slog.Info("Starting MQTT broker", "addr", cfg.MQTTAddrPort().String())
+	// Serve starts the listeners and returns; the broker runs until Close.
+	if err := mqttServer.Serve(); err != nil {
 		eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
 			Timestamp: time.Now(),
 			Component: mqttComponent,
-			Status:    events.ConnectionStatusConnected,
+			Status:    events.ConnectionStatusFailed,
+			Error:     err.Error(),
 		})
-		if err := mqttServer.Serve(); err != nil {
-			eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
-				Timestamp: time.Now(),
-				Component: mqttComponent,
-				Status:    events.ConnectionStatusFailed,
-				Error:     err.Error(),
-			})
-			slog.Error("MQTT server error", "error", err)
-			return
-		}
-		eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
-			Timestamp: time.Now(),
-			Component: mqttComponent,
-			Status:    events.ConnectionStatusDisconnected,
-		})
-	}()
-
+		slog.Error("Failed to start MQTT broker", "error", err)
+		os.Exit(1)
+	}
+	eventBus.PublishConnectionStatus(mqttClient, events.ConnectionStatusEvent{
+		Timestamp: time.Now(),
+		Component: mqttComponent,
+		Status:    events.ConnectionStatusConnected,
+	})
 	slog.Info("MQTT broker started", "addr", cfg.MQTTAddrPort().String())
 
 	go plugManager.ProcessStateEvents(ctx)
 
-	for _, plug := range plugCfg.Plugs {
-		go func(plugID string) {
-			state, err := plugManager.GetStatus(ctx, plugID)
-			if err != nil {
-				slog.Warn(
-					"Failed to get initial status",
-					"plug_id", plugID,
-					"error", err,
-				)
-				return
-			}
-			slog.Info(
-				"Initial plug state",
-				"plug_id", plugID,
-				"on", state.On,
-			)
-		}(plug.ID)
-	}
-
-	for _, plug := range plugCfg.Plugs {
-		go func(plugID string) {
-			time.Sleep(time.Second)
-
-			if err := plugManager.ConfigureMQTT(ctx, plugID, localIP, int(cfg.MQTTAddrPort().Port())); err != nil {
-				slog.Error(
-					"Failed to configure MQTT for plug",
-					"plug_id", plugID,
-					"error", err,
-				)
-				errorPublisher.Publish(plugs.ErrorEvent{
-					PlugID: plugID,
-					Error:  fmt.Errorf("MQTT configuration failed: %w", err),
-				})
-				return
-			}
-
-			slog.Info("Plug configured for MQTT", "plug_id", plugID)
-		}(plug.ID)
-	}
-
+	// Its first pass reads every plug's state and MQTT settings.
 	go plugManager.MonitorConnections(ctx, localIP, int(cfg.MQTTAddrPort().Port()))
-	slog.Info("Connection monitoring started")
 
 	hapManager := NewHAPManager(plugCfg.Plugs, cfg.BridgeName, plugManager, eventBus)
 	hapManager.Start(ctx)

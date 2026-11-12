@@ -2,6 +2,7 @@ package plugs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -20,12 +21,16 @@ type fakeClient struct {
 	cmds      []string
 	backlog   []string
 	responses [][]byte
+	err       error // fails every request when set
 }
 
 func (f *fakeClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cmds = append(f.cmds, cmd)
+	if f.err != nil {
+		return nil, f.err
+	}
 	if len(f.responses) > 0 {
 		resp := f.responses[0]
 		f.responses = f.responses[1:]
@@ -42,8 +47,34 @@ func (f *fakeClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, erro
 func (f *fakeClient) ExecuteBacklog(_ context.Context, cmds ...string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
 	f.backlog = append(f.backlog, cmds...)
 	return nil, nil
+}
+
+func (f *fakeClient) statusReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, cmd := range f.cmds {
+		if cmd == "Status 0" {
+			n++
+		}
+	}
+	return n
+}
+
+// tasmotaStatus is a Status 0 reply from a plug that is on, cut to the
+// sections the manager reads plus some of their neighbours.
+func tasmotaStatus(host string, port int, topic string) []byte {
+	return fmt.Appendf(nil, `{
+		"Status":{"Module":1,"DeviceName":"Plug","FriendlyName":["Plug"],"Topic":%q,"ButtonTopic":"0","Power":"1"},
+		"StatusLOG":{"SerialLog":2,"WebLog":2,"MqttLog":0,"SysLog":0,"TelePeriod":300},
+		"StatusMQT":{"MqttHost":%q,"MqttPort":%d,"MqttClientMask":"DVES_%%06X","MqttClient":"DVES_ABCDEF","MqttUser":"DVES_USER","MqttCount":0,"KEEPALIVE":30},
+		"StatusSTS":{"POWER":"ON"}
+	}`, topic, host, port)
 }
 
 var _ interface {
@@ -140,15 +171,87 @@ func TestPowerReplyOlderThanReportDropped(t *testing.T) {
 	require.False(t, state.On, "Power reply overwrote a newer report")
 }
 
-func TestConfigureMQTTBacklog(t *testing.T) {
+// A plug is sent only the MQTT settings that differ: Tasmota restarts on
+// MqttHost and MqttPort even when the value is unchanged, so a plug already
+// pointed at the broker must get nothing. The read also refreshes its state.
+func TestCheckMQTT(t *testing.T) {
+	const host, port = "10.0.0.2", 1883
+	for _, tc := range []struct {
+		name    string
+		status  []byte
+		want    []string
+		wantErr bool
+	}{
+		{"settings match", tasmotaStatus(host, port, "tasmota/plug-1"), nil, false},
+		{"other broker", tasmotaStatus("10.0.0.9", port, "tasmota/plug-1"), []string{"MqttHost 10.0.0.2"}, false},
+		{"other port", tasmotaStatus(host, 1884, "tasmota/plug-1"), []string{"MqttPort 1883"}, false},
+		{"fresh plug", tasmotaStatus("", port, "tasmota_ABCDEF"), []string{"MqttHost 10.0.0.2", "Topic tasmota/plug-1"}, false},
+		{"no MQTT section", []byte(`{"StatusSTS":{"POWER":"ON"}}`), nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pm, fake := newTestManager(t)
+			fake.responses = [][]byte{tc.status}
+
+			err := pm.checkMQTT(context.Background(), "plug-1", host, port)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, tc.want, fake.backlog)
+			_, state, _ := pm.Plug("plug-1")
+			require.True(t, state.On)
+		})
+	}
+}
+
+// Tasmota may store a setting other than the one sent; resending it would
+// restart the plug on every check, so a plug is reconfigured once per run.
+func TestCheckMQTTRestartsPlugOnce(t *testing.T) {
 	pm, fake := newTestManager(t)
+	stale := tasmotaStatus("10.0.0.9", 1883, "tasmota/plug-1")
+	fake.responses = [][]byte{stale, stale}
 
-	err := pm.ConfigureMQTT(context.Background(), "plug-1", "host", 1234)
-	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, pm.checkMQTT(ctx, "plug-1", "10.0.0.2", 1883))
+	require.Error(t, pm.checkMQTT(ctx, "plug-1", "10.0.0.2", 1883))
+	require.Equal(t, []string{"MqttHost 10.0.0.2"}, fake.backlog)
+}
 
-	require.Contains(t, fake.backlog, "MqttHost host")
-	require.Contains(t, fake.backlog, "MqttPort 1234")
-	require.Contains(t, fake.backlog, "Topic tasmota/plug-1")
+// A tick checks the plugs not heard on MQTT within silentAfter. Plugs report
+// at least every TelePeriod, so a healthy one is never checked; one never
+// heard counts as silent, so every plug is checked at start and one that
+// never reports keeps being checked.
+func TestCheckConnections(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name     string
+		lastSeen time.Time
+		want     int // Status 0 reads over two ticks
+	}{
+		{"never heard", time.Time{}, 2},
+		{"reported a TelePeriod ago", now.Add(-5 * time.Minute), 0},
+		{"reported silentAfter ago", now.Add(-silentAfter), 0},
+		{"silent longer", now.Add(-silentAfter - time.Second), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pm, fake := newTestManager(t)
+			if !tc.lastSeen.IsZero() {
+				pm.update("eventbus", "plug-1", func(s State) State {
+					return mergeEvent(s, StateChangedEvent{PlugID: "plug-1", Received: tc.lastSeen})
+				})
+			}
+			ok := tasmotaStatus("10.0.0.2", 1883, "tasmota/plug-1")
+			fake.responses = [][]byte{ok, ok}
+
+			for range 2 {
+				pm.checkConnections(context.Background(), now, "10.0.0.2", 1883)
+			}
+			require.Equal(t, tc.want, fake.statusReads())
+			require.Empty(t, fake.backlog)
+		})
+	}
 }
 
 // Current Tasmota sends Status.Power as a bitmask string ("1"); the reply must
