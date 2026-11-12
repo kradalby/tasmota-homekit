@@ -37,7 +37,7 @@ type TestStateSyncEnvironment struct {
 }
 
 type fakePlugClient struct {
-	lastCmd   string
+	mu        sync.Mutex
 	responses [][]byte
 
 	// beforeReply, if set, runs before each command is answered.
@@ -45,16 +45,25 @@ type fakePlugClient struct {
 }
 
 func (f *fakePlugClient) ExecuteCommand(_ context.Context, cmd string) ([]byte, error) {
-	f.lastCmd = cmd
-	if f.beforeReply != nil {
-		f.beforeReply(cmd)
-	}
+	f.mu.Lock()
+	var resp []byte
 	if len(f.responses) > 0 {
-		resp := f.responses[0]
-		f.responses = f.responses[1:]
+		resp, f.responses = f.responses[0], f.responses[1:]
+	}
+	before := f.beforeReply
+	f.mu.Unlock()
+
+	if before != nil {
+		before(cmd)
+	}
+	if resp != nil {
 		return resp, nil
 	}
-	// Default response for Power ON
+	// Answer as a single-relay plug that is on: Power with the state it
+	// switched to, Status 0 with its status.
+	if state, ok := strings.CutPrefix(cmd, "Power "); ok {
+		return []byte(`{"POWER":"` + state + `"}`), nil
+	}
 	return []byte(`{"StatusSTS":{"POWER":"ON"}}`), nil
 }
 
@@ -202,11 +211,6 @@ func TestSetPowerSyncsToAllViews(t *testing.T) {
 		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
 	})
 
-	// Configure fake client to return ON
-	env.fakeClient.responses = [][]byte{
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
-	}
-
 	// Turn plug ON via SetPower
 	err := env.manager.SetPower(env.ctx, "plug-1", true)
 	require.NoError(t, err)
@@ -243,10 +247,6 @@ func TestHomeKitCommandSyncsToWeb(t *testing.T) {
 		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
 	})
 
-	env.fakeClient.responses = [][]byte{
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
-	}
-
 	require.Zero(t, homeKitWrite(env.hapManager, "plug-1", true))
 
 	// All views should show ON
@@ -258,10 +258,6 @@ func TestWebCommandSyncsToHomeKit(t *testing.T) {
 	env := setupStateSyncTest(t, []plugs.Plug{
 		{ID: "plug-1", Name: "Test Lamp", Address: "192.168.1.100"},
 	})
-
-	env.fakeClient.responses = [][]byte{
-		[]byte(`{"StatusSTS":{"POWER":"ON"}}`),
-	}
 
 	req := httptest.NewRequest(http.MethodPost, "/toggle/plug-1", strings.NewReader("action=on"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
