@@ -60,7 +60,6 @@ type WebServer struct {
 	sseClientsMu     sync.RWMutex
 	hapPin           string
 	qrCode           string
-	hapManager       *HAPManager
 
 	// done is closed by Close to wake handlers that outlive the server.
 	done      chan struct{}
@@ -68,7 +67,7 @@ type WebServer struct {
 }
 
 // NewWebServer creates a new web server
-func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controller PlugController, bus *events.Bus, kraweb *web.KraWeb, hapPin, qrCode string, hapManager *HAPManager) *WebServer {
+func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controller PlugController, bus *events.Bus, kraweb *web.KraWeb, hapPin, qrCode string) *WebServer {
 	client, err := bus.Client(events.ClientWeb)
 	if err != nil {
 		panic(fmt.Sprintf("failed to create web client: %v", err))
@@ -88,7 +87,6 @@ func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controlle
 		sseClients:       make(map[chan events.StateUpdateEvent]struct{}),
 		hapPin:           hapPin,
 		qrCode:           qrCode,
-		hapManager:       hapManager,
 		done:             make(chan struct{}),
 	}
 }

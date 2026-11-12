@@ -320,11 +320,6 @@ func Main() {
 	fmt.Println("========================================")
 	slog.Info("Scan QR code or enter PIN manually in Home app", "pin", cfg.HAPPin)
 
-	qrCode := ""
-	if qr != "" {
-		qrCode = qr
-	}
-
 	kraOpts := []web.Option{
 		web.WithStdLogger(log.New(os.Stdout, "kraweb: ", log.LstdFlags)),
 		web.WithLogger(logger),
@@ -345,7 +340,7 @@ func Main() {
 		os.Exit(1)
 	}
 
-	webServer := NewWebServer(logger, plugManager, plugManager, eventBus, kraWeb, cfg.HAPPin, qrCode, hapManager)
+	webServer := NewWebServer(logger, plugManager, plugManager, eventBus, kraWeb, cfg.HAPPin, qr)
 	webServer.LogEvent("Server starting...")
 	webServer.Start(ctx)
 	defer webServer.Close()

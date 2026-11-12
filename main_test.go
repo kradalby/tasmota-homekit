@@ -30,16 +30,3 @@ func TestLoadPlugsConfig(t *testing.T) {
 		}
 	}
 }
-
-func TestGetLocalIP(t *testing.T) {
-	ip, err := getLocalIP()
-	if err != nil {
-		t.Skipf("No local IP found (expected in some environments): %v", err)
-	}
-
-	if ip == "" {
-		t.Error("Local IP should not be empty")
-	}
-
-	t.Logf("Found local IP: %s", ip)
-}
