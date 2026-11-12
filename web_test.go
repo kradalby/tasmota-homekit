@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -155,9 +156,12 @@ func addPlug(f *fakePlugProvider, p plugs.Plug, s plugs.State) {
 }
 
 func TestRoutes(t *testing.T) {
-	ws, _, _, _ := newTestWebServer(t)
+	ws, _, controller, _ := newTestWebServer(t)
 	mux := http.NewServeMux()
 	ws.registerRoutes(mux)
+
+	var refreshes atomic.Int32
+	controller.refreshFunc = func(context.Context) { refreshes.Add(1) }
 
 	// /events streams until the request ends.
 	ended, cancel := context.WithCancel(t.Context())
@@ -176,15 +180,23 @@ func TestRoutes(t *testing.T) {
 		{http.MethodGet, "/health", http.StatusOK, "application/json", `"status":"ok"`},
 		{http.MethodGet, "/qrcode", http.StatusOK, "text/plain", "00102003"},
 		{http.MethodGet, "/debug/eventbus", http.StatusOK, "text/html", "EventBus Debug"},
+		// The index refreshes every plug; a browser's favicon request or any
+		// other unknown path must not.
+		{http.MethodGet, "/favicon.ico", http.StatusNotFound, "", ""},
+		{http.MethodGet, "/nope/", http.StatusNotFound, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
+			before := refreshes.Load()
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequestWithContext(ended, tt.method, tt.path, nil))
 
 			assert.Equal(t, tt.wantCode, rec.Code)
 			assert.Contains(t, rec.Header().Get("Content-Type"), tt.wantType)
 			assert.Contains(t, rec.Body.String(), tt.wantBody)
+			if tt.path != "/" {
+				assert.Equal(t, before, refreshes.Load(), "plugs refreshed")
+			}
 		})
 	}
 }
