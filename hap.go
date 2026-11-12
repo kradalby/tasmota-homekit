@@ -4,6 +4,7 @@ import (
 	"context"
 	"hash/fnv"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,8 +22,8 @@ func hashString(s string) uint64 {
 	return h.Sum64()
 }
 
-// hapWriteTimeout bounds a HomeKit write: the controller's request waits on
-// the plug until it answers.
+// hapWriteTimeout bounds a HomeKit write's command, so a plug that does not
+// answer holds back later writes to it only this long.
 const hapWriteTimeout = 5 * time.Second
 
 // hapPlugs is the part of plugs.Manager HomeKit uses.
@@ -36,7 +37,7 @@ type hapPlugs interface {
 type Switchable interface {
 	SetOn(on bool)
 	OnValue() bool
-	OnSetRemoteValue(f func(on bool) error)
+	OnValueRemoteUpdate(f func(on bool))
 	ID() uint64
 }
 
@@ -53,8 +54,8 @@ func (w *OutletWrapper) OnValue() bool {
 	return w.Outlet.Outlet.On.Value()
 }
 
-func (w *OutletWrapper) OnSetRemoteValue(f func(on bool) error) {
-	w.Outlet.Outlet.On.OnSetRemoteValue(f)
+func (w *OutletWrapper) OnValueRemoteUpdate(f func(on bool)) {
+	w.Outlet.Outlet.On.OnValueRemoteUpdate(f)
 }
 
 func (w *OutletWrapper) ID() uint64 {
@@ -74,8 +75,8 @@ func (w *LightbulbWrapper) OnValue() bool {
 	return w.Lightbulb.Lightbulb.On.Value()
 }
 
-func (w *LightbulbWrapper) OnSetRemoteValue(f func(on bool) error) {
-	w.Lightbulb.Lightbulb.On.OnSetRemoteValue(f)
+func (w *LightbulbWrapper) OnValueRemoteUpdate(f func(on bool)) {
+	w.Lightbulb.Lightbulb.On.OnValueRemoteUpdate(f)
 }
 
 func (w *LightbulbWrapper) ID() uint64 {
@@ -91,6 +92,14 @@ type HAPManager struct {
 	stateSubscriber *eventbus.Subscriber[events.StateUpdateEvent]
 	eventBus        *events.Bus
 	eventClient     *eventbus.Client
+
+	// Commands run in the background until Close cancels ctx; mu keeps a
+	// new command from starting while Close waits on wg.
+	writes map[string]*plugWrites
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	wg     sync.WaitGroup
 
 	// Runtime info
 	server *hap.Server
@@ -122,6 +131,7 @@ func NewHAPManager(
 		SerialNumber: "TB001",
 	})
 
+	ctx, cancel := context.WithCancel(context.Background())
 	hm := &HAPManager{
 		bridge:          bridge,
 		accessories:     make(map[string]Switchable),
@@ -130,6 +140,9 @@ func NewHAPManager(
 		stateSubscriber: eventbus.Subscribe[events.StateUpdateEvent](client),
 		eventBus:        bus,
 		eventClient:     client,
+		writes:          make(map[string]*plugWrites),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	// Create accessory for each plug
@@ -169,24 +182,17 @@ func NewHAPManager(
 		// Capture plug ID for closure
 		plugID := plug.ID
 
-		// hap stores the written value only when this returns nil, so a
-		// command the plug did not take never shows up in HomeKit.
-		switchable.OnSetRemoteValue(func(on bool) error {
+		// hap calls this after storing the written value, so the request
+		// does not wait on the plug, and a resync in send cannot be
+		// overwritten by the value it replaces.
+		hm.writes[plugID] = &plugWrites{}
+		switchable.OnValueRemoteUpdate(func(on bool) {
 			slog.Info("HomeKit command received", "plug_id", plugID, "on", on)
 
 			hm.incomingCommands.Add(1)
 			hm.lastActivity.Store(time.Now().Unix())
 			hm.publishCommand(plugID, on)
-
-			ctx, cancel := context.WithTimeout(context.Background(), hapWriteTimeout)
-			defer cancel()
-
-			if err := hm.manager.SetPower(ctx, plugID, on); err != nil {
-				slog.Error("HomeKit command failed", "plug_id", plugID, "error", err)
-				return err
-			}
-
-			return nil
+			hm.send(plugID, on)
 		})
 
 		// Changes stored before stateSubscriber existed were never
@@ -254,9 +260,58 @@ func (hm *HAPManager) Start(ctx context.Context) {
 	go hm.ProcessStateChanges(ctx)
 }
 
-// Close releases subscriptions.
+// Close cancels the commands still out, waits for them and releases
+// subscriptions.
 func (hm *HAPManager) Close() {
+	hm.mu.Lock()
+	hm.cancel()
+	hm.mu.Unlock()
+	hm.wg.Wait()
 	hm.stateSubscriber.Close()
+}
+
+// plugWrites orders HomeKit writes to one plug.
+type plugWrites struct {
+	mu     sync.Mutex    // held while the plug's command is out
+	latest atomic.Uint64 // number of the newest write
+}
+
+// send switches plugID in the background, so a scene's plugs switch
+// together. Each plug takes one command at a time and only the newest write
+// is sent, so the last write wins. When that write is done, HomeKit is set to
+// the manager's state: the manager publishes only changes, so a write the
+// plug did not take would otherwise stay in hap's cache, and hap ignores
+// writes equal to its cache.
+func (hm *HAPManager) send(plugID string, on bool) {
+	w := hm.writes[plugID]
+	n := w.latest.Add(1)
+
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+	if hm.ctx.Err() != nil {
+		return
+	}
+
+	hm.wg.Go(func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.latest.Load() != n {
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(hm.ctx, hapWriteTimeout)
+		defer cancel()
+		if err := hm.manager.SetPower(ctx, plugID, on); err != nil {
+			slog.Error("HomeKit command failed", "plug_id", plugID, "on", on, "error", err)
+		}
+
+		if w.latest.Load() != n {
+			return
+		}
+		if _, state, ok := hm.manager.Plug(plugID); ok {
+			hm.accessories[plugID].SetOn(state.On)
+		}
+	})
 }
 
 func (hm *HAPManager) SetServer(s *hap.Server) {
