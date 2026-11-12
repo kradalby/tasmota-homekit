@@ -284,24 +284,7 @@ func (ws *WebServer) renderPlugCard(plugID string, info plugs.Plug, state plugs.
 		buttonAction = "off"
 	}
 
-	// Determine connection status
-	var connectionIndicator, connectionText string
-	if state.LastSeen.IsZero() {
-		connectionIndicator = "disconnected"
-		connectionText = "Never seen"
-	} else {
-		timeSinceSeen := time.Since(state.LastSeen)
-		if timeSinceSeen < 30*time.Second {
-			connectionIndicator = "connected"
-			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
-		} else if timeSinceSeen < 60*time.Second {
-			connectionIndicator = "stale"
-			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
-		} else {
-			connectionIndicator = "disconnected"
-			connectionText = fmt.Sprintf("Last seen: %s ago", timeSinceSeen.Round(time.Second))
-		}
-	}
+	connectionIndicator, connectionText := plugs.Connection(state.LastSeen)
 
 	// Icon selection
 	icon := "🔌" // Default plug icon
