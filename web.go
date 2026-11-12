@@ -93,6 +93,17 @@ func NewWebServer(logger *slog.Logger, plugProvider plugStateProvider, controlle
 	}
 }
 
+// registerRoutes mounts the web UI. Paths stay in step with nefit-homekit;
+// /metrics comes from kraweb, on the tailnet listener only.
+func (ws *WebServer) registerRoutes(mux interface{ Handle(string, http.Handler) }) {
+	mux.Handle("/", http.HandlerFunc(ws.HandleIndex))
+	mux.Handle("/toggle/", http.HandlerFunc(ws.HandleToggle))
+	mux.Handle("/events", http.HandlerFunc(ws.HandleSSE))
+	mux.Handle("/health", http.HandlerFunc(ws.HandleHealth))
+	mux.Handle("/qrcode", http.HandlerFunc(ws.HandleQRCode))
+	mux.Handle("/debug/eventbus", http.HandlerFunc(ws.HandleEventBusDebug))
+}
+
 // LogEvent adds an event to the log
 func (ws *WebServer) LogEvent(event string) {
 	ws.eventLogMu.Lock()
